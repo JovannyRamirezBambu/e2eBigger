@@ -1,0 +1,39 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "lib": ["ES2022"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    // Los DTOs de BCB declaran `campo: string;` sin inicializador (Nest los
+    // hidrata). BCB compila con strictPropertyInitialization en false; como acá
+    // se typechequean SUS archivos, hay que igualar ese ajuste o cada propiedad
+    // de cada DTO importado sale como error.
+    "strictPropertyInitialization": false,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "types": ["node"],
+    // Los DTOs de los satélites usan decoradores. Solo se importan con
+    // `import type` (se borran al compilar), pero el typechecker igual tiene que
+    // poder leer esos archivos sin quejarse.
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "baseUrl": ".",
+    "paths": {
+      "@bcb/prisma": ["../BCB_EstrellaRoja_Backend/generated/prisma/client"],
+      "@bcb/prisma-enums": ["../BCB_EstrellaRoja_Backend/generated/prisma/enums"],
+      "@bcb/dto/*": ["../BCB_EstrellaRoja_Backend/apps/bcb/src/*"],
+      "@harness/*": ["src/harness/*"]
+    }
+  },
+  "include": ["src/**/*.ts"],
+  // ui/ es un proyecto aparte (React/Vite, su propio tsconfig y su propio
+  // `pnpm --dir ui typecheck`): distinto módulo, distinto target, distinto
+  // node_modules. Incluirlo acá typechequearía sus .tsx con este tsconfig
+  // (commonjs, sin JSX) y fallaría.
+  "exclude": ["node_modules", "run", "ui"]
+}

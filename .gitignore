@@ -1,0 +1,6 @@
+# Artefactos de corrida: logs, pids, llaves de prueba, respuestas HTTP.
+run/
+node_modules/
+
+# Build del panel (React/Vite) — lo arma `./e2e ui` solo si hace falta.
+ui/dist/

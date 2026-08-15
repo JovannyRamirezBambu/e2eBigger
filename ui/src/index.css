@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Paleta en HSL (para poder variar opacidad con Tailwind), traducida de la
+ * versión anterior del panel: mismo carácter tonal, ahora como tokens de
+ * shadcn/ui. Sin selector de tema manual — sigue prefers-color-scheme, como
+ * siempre hizo este panel.
+ */
+:root {
+  --background: 210 20% 95%;
+  --foreground: 210 24% 11%;
+  --card: 210 27% 99%;
+  --card-foreground: 210 24% 11%;
+  --popover: 210 27% 99%;
+  --popover-foreground: 210 24% 11%;
+  --primary: 201 63% 33%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 210 20% 90%;
+  --secondary-foreground: 210 24% 11%;
+  --muted: 210 16% 89%;
+  --muted-foreground: 210 10% 45%;
+  --accent: 205 45% 91%;
+  --accent-foreground: 201 63% 30%;
+  --destructive: 8 55% 42%;
+  --destructive-foreground: 0 0% 100%;
+  --success: 141 39% 30%;
+  --success-foreground: 0 0% 100%;
+  --warning: 36 82% 34%;
+  --warning-foreground: 0 0% 100%;
+  --border: 210 14% 80%;
+  --input: 210 14% 80%;
+  --ring: 201 63% 33%;
+  --radius: 0.65rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: 210 20% 8%;
+    --foreground: 210 18% 91%;
+    --card: 210 18% 12%;
+    --card-foreground: 210 18% 91%;
+    --popover: 210 18% 12%;
+    --popover-foreground: 210 18% 91%;
+    --primary: 204 62% 65%;
+    --primary-foreground: 210 30% 8%;
+    --secondary: 210 16% 16%;
+    --secondary-foreground: 210 18% 91%;
+    --muted: 210 14% 18%;
+    --muted-foreground: 210 10% 58%;
+    --accent: 205 40% 17%;
+    --accent-foreground: 204 62% 70%;
+    --destructive: 14 70% 70%;
+    --destructive-foreground: 8 40% 12%;
+    --success: 137 33% 62%;
+    --success-foreground: 141 45% 9%;
+    --warning: 39 68% 62%;
+    --warning-foreground: 36 65% 9%;
+    --border: 210 12% 21%;
+    --input: 210 12% 21%;
+    --ring: 204 62% 65%;
+  }
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+body {
+  @apply bg-background text-foreground antialiased;
+  font: 14px/1.55 -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+}
+
+::selection {
+  background: hsl(var(--primary) / 0.25);
+}

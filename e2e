@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# Harness de pruebas end-to-end para los flujos de BIGER ↔ satélites.
+#
+#   ./e2e run tomtom          ciclo completo: levantar → sembrar → probar → verificar
+#   ./e2e list                flujos disponibles
+#   ./e2e help
+#
+# Cada flujo vive en flows/<nombre>/flow.sh y expone las mismas funciones, así que
+# agregar un flujo nuevo (ventaabordo, abordajemovil…) no toca este archivo.
+set -uo pipefail
+
+E2E_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$E2E_ROOT/lib/common.sh"
+
+FLOWS_DIR="$E2E_ROOT/flows"
+
+usage() {
+  cat <<'EOF'
+Uso: ./e2e <comando> [flujo] [args]
+
+Comandos:
+  run <flujo>            Ciclo completo: up → seed → test → verify   (lo normal)
+  up <flujo>             Levanta solo la infraestructura y los servicios
+  seed <flujo>           Recrea los datos de prueba (idempotente)
+  test <flujo> [caso]    Corre los casos; sin argumento corre todos
+  verify <flujo>         Imprime el estado en BD para revisarlo a ojo
+  ui <flujo>             Abre el panel en el navegador (diagrama + botones)
+  demo                   Panel de DEMOSTRACIÓN de Venta a Bordo, para presentar
+                         los 3 servicios del contrato TI-FT-45 a cliente/proveedor
+  down <flujo>           Detiene los servicios de este flujo
+  status <flujo>         Qué está arriba y qué no
+  psql <flujo>           Abre psql en la BD principal del flujo
+  logs <flujo> [srv]     Sigue los logs (sin srv: lista los disponibles)
+  list                   Flujos disponibles
+  help
+
+Salidas en JSON (las usa la UI, sirven para scriptear):
+  cases · probe · db-json · results · traffic
+
+Ejemplos:
+  ./e2e run tomtom
+  ./e2e test tomtom t11-idempotente
+  ./e2e verify tomtom
+  ./e2e psql tomtom
+
+Notas:
+  · `down` NO apaga la infraestructura compartida (NATS, Postgres de BIGER):
+    otros flujos la usan. Para eso: `./e2e down <flujo> --all`.
+  · Las llaves RSA de prueba se generan en run/keys/ la primera vez y se
+    reutilizan. Son de un solo uso local — nunca credenciales reales.
+EOF
+}
+
+# Recorre flows/*/ y emite "nombre<TAB>descripción". La usan `list` (para vos) y
+# el panel (para poblar su selector), así que agregar un flujo aparece en los dos
+# sin tocar nada más.
+flows_tsv() {
+  local d name desc
+  for d in "$FLOWS_DIR"/*/; do
+    [ -f "$d/flow.sh" ] || continue
+    name="$(basename "$d")"
+    desc="$(grep -m1 '^FLOW_DESC=' "$d/flow.sh" | sed 's/^FLOW_DESC=//; s/^"//; s/"$//')"
+    printf '%s\t%s\n' "$name" "$desc"
+  done
+}
+
+list_flows() {
+  step "Flujos disponibles"
+  local out; out="$(flows_tsv)"
+  if [ -z "$out" ]; then
+    warn "no hay flujos en $FLOWS_DIR"
+    return
+  fi
+  while IFS=$'\t' read -r name desc; do
+    printf '  %-14s %s\n' "$name" "${C_DIM}${desc}${C_RESET}"
+  done <<< "$out"
+}
+
+load_flow() {
+  local flow="$1"
+  local path="$FLOWS_DIR/$flow/flow.sh"
+  [ -f "$path" ] || { err "flujo desconocido: '$flow'"; list_flows; exit 1; }
+  FLOW_NAME="$flow"
+  FLOW_DIR="$FLOWS_DIR/$flow"
+  # shellcheck source=/dev/null
+  source "$path"
+}
+
+require_fn() {
+  declare -F "$1" >/dev/null || die "el flujo '$FLOW_NAME' no implementa $1()"
+}
+
+cmd="${1:-help}"
+case "$cmd" in
+  help|-h|--help) usage; exit 0 ;;
+  list)           list_flows; exit 0 ;;
+  flows)          flows_tsv;  exit 0 ;;   # legible por máquina, para el panel
+  # El panel de demostración es de Venta a Bordo y de nadie más: no lleva flujo.
+  demo)           need_cmd node; exec node "$E2E_ROOT/demo/server.cjs" ;;
+esac
+
+flow="${2:-}"
+[ -n "$flow" ] || { err "falta el flujo"; usage; exit 1; }
+shift 2 || true
+load_flow "$flow"
+
+# La capa de pruebas vive en TypeScript (src/): payloads tipados con los DTOs
+# reales de los satélites, Prisma tipado y cliente NATS de verdad. Bash se queda
+# con lo que hace bien: docker, maven, puertos y ciclo de vida de procesos.
+ts() { ( cd "$E2E_ROOT" && pnpm exec tsx src/cli.ts "$FLOW_NAME" "$@" ); }
+
+case "$cmd" in
+  up)     require_fn flow_up;     flow_up "$@" ;;
+  down)   require_fn flow_down;   flow_down "$@" ;;
+  status) require_fn flow_status; flow_status "$@" ;;
+  psql)   require_fn flow_psql;   flow_psql "$@" ;;
+  # ── Capa TS ──
+  seed)   ts seed ;;
+  test)   ts test "$@" ;;
+  verify) ts verify ;;
+  cases)  ts cases ;;
+  probe)  ts probe ;;
+  db-json) ts db-json ;;
+  dlq)    ts dlq "$@" ;;
+  traffic) ts traffic ;;
+  results) cat "$RUN_DIR/$FLOW_NAME-results.json" 2>/dev/null || echo '{}' ;;
+  ui)
+    need_cmd node
+    ensure_ui_build
+    exec node "$E2E_ROOT/ui/server.cjs" "$FLOW_NAME" "$@"
+    ;;
+  logs)
+    if [ $# -eq 0 ]; then
+      step "Logs disponibles"; ls -1 "$LOG_DIR" 2>/dev/null | sed 's/^/  /' || warn "ninguno todavía"
+    else
+      tail -f "$LOG_DIR/$1.log"
+    fi
+    ;;
+  run)
+    require_fn flow_up
+    flow_up || die "falló el levantamiento"
+    ts seed || die "falló el seed"
+    ts test; test_code=$?
+    ts verify
+    exit "$test_code"
+    ;;
+  *) err "comando desconocido: '$cmd'"; usage; exit 1 ;;
+esac

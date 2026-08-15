@@ -1,0 +1,798 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panel E2E · BIGER</title>
+<style>
+  :root {
+    --bg:#eef1f4; --panel:#fbfcfd; --inset:#e5e9ee; --rule:#ccd3da; --rule-hard:#a9b2bc;
+    --ink:#171c22; --ink-soft:#4b555f; --ink-faint:#7d8791;
+    --accent:#1d5a87; --accent-soft:#dbe7f0;
+    --ok:#2f6b46; --ok-soft:#dceade; --ok-ink:#194028;
+    --bad:#a3402c; --bad-soft:#f5e0da; --bad-ink:#5c2014;
+    --warn:#9a6410; --warn-soft:#f5eada; --warn-ink:#5b3a06;
+    --idle:#8b959e;
+    --shadow:rgba(23,28,34,.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#11151a; --panel:#181e24; --inset:#1e252c; --rule:#293138; --rule-hard:#3a444d;
+      --ink:#e6eaee; --ink-soft:#a7b2bc; --ink-faint:#77818b;
+      --accent:#67aede; --accent-soft:#162b3b;
+      --ok:#6fb587; --ok-soft:#162f1e; --ok-ink:#b7dfc3;
+      --bad:#e08e77; --bad-soft:#351b14; --bad-ink:#f2c0af;
+      --warn:#d6a24e; --warn-soft:#33280e; --warn-ink:#efd69a;
+      --idle:#5d666e;
+      --shadow:rgba(0,0,0,.4);
+    }
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; }
+  body {
+    background:var(--bg); color:var(--ink);
+    font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono, code { font-family:"SF Mono","IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace; }
+  button { font:inherit; cursor:pointer; }
+  button:focus-visible, [tabindex]:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+  .wrap { max-width:1320px; margin:0 auto; padding:0 20px 60px; }
+
+  /* ── header ── */
+  header {
+    display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+    padding:20px 0 16px; border-bottom:1px solid var(--rule); margin-bottom:20px;
+  }
+  header h1 { margin:0; font-size:17px; font-weight:700; letter-spacing:-.01em; }
+  header .flow-pick {
+    font:inherit; font-size:12.5px; font-weight:700;
+    font-family:"SF Mono",ui-monospace,monospace;
+    padding:5px 9px; border-radius:6px; background:var(--accent-soft);
+    color:var(--accent); border:1px solid var(--accent); cursor:pointer;
+  }
+  header .flow-desc { font-size:12px; color:var(--ink-faint); max-width:46ch; }
+  @media (max-width:900px) { header .flow-desc { display:none; } }
+  header .spacer { flex:1; }
+  .summary { display:flex; align-items:baseline; gap:8px; font-variant-numeric:tabular-nums; }
+  .summary .big { font-size:22px; font-weight:700; }
+  .summary .lbl { font-size:12px; color:var(--ink-faint); }
+  .btn {
+    background:var(--panel); border:1px solid var(--rule-hard); color:var(--ink);
+    padding:8px 14px; border-radius:7px; font-weight:600; font-size:13px;
+  }
+  .btn:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+  .btn:disabled { opacity:.45; cursor:not-allowed; }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  @media (prefers-color-scheme: dark) { .btn.primary { color:#0d1319; } }
+  .btn.primary:hover:not(:disabled) { filter:brightness(1.08); color:#fff; }
+  @media (prefers-color-scheme: dark) { .btn.primary:hover:not(:disabled) { color:#0d1319; } }
+
+  /* ── chain ── */
+  section.chain { margin-bottom:22px; }
+  .sec-title { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--ink-faint); font-weight:700; margin-bottom:9px; }
+  .chain-scroll { overflow-x:auto; padding-bottom:4px; }
+  .chain-row { display:flex; align-items:stretch; gap:0; min-width:940px; }
+  .node {
+    flex:1 1 0; min-width:158px; background:var(--panel); border:1px solid var(--rule);
+    border-radius:9px; padding:12px 13px; box-shadow:0 1px 2px var(--shadow);
+    text-align:left; position:relative; transition:border-color .12s;
+  }
+  .node:hover { border-color:var(--rule-hard); }
+  .node.sel { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+  .node.down { border-color:var(--bad); }
+  .node .top { display:flex; align-items:center; gap:7px; }
+  .dot { width:8px; height:8px; border-radius:50%; flex:0 0 auto; background:var(--idle); }
+  .dot.up { background:var(--ok); }
+  .dot.down { background:var(--bad); }
+  .node .name { font-weight:700; font-size:13px; }
+  .node .sub { color:var(--ink-faint); font-size:11px; margin-top:3px; }
+  .node .metrics { display:flex; gap:12px; margin-top:8px; }
+  .node .metrics div { font-size:11px; color:var(--ink-soft); }
+  .node .metrics b { font-size:14px; display:block; font-variant-numeric:tabular-nums; color:var(--ink); }
+  .node .metrics b.alert { color:var(--bad); }
+  .node .err {
+    margin-top:8px; font-size:10.5px; line-height:1.4; color:var(--bad-ink);
+    background:var(--bad-soft); border-radius:4px; padding:5px 6px;
+    max-height:44px; overflow:hidden;
+  }
+  .arrow { flex:0 0 30px; display:flex; align-items:center; justify-content:center; color:var(--ink-faint); font-size:15px; }
+
+  /* ── grid ── */
+  .cols { display:grid; grid-template-columns:minmax(340px,1fr) minmax(420px,1.25fr); gap:18px; align-items:start; }
+  @media (max-width:900px) { .cols { grid-template-columns:1fr; } }
+  .card { background:var(--panel); border:1px solid var(--rule); border-radius:10px; box-shadow:0 1px 2px var(--shadow); overflow:hidden; }
+  .card > header {
+    display:flex; align-items:center; gap:10px; padding:11px 14px; margin:0;
+    border-bottom:1px solid var(--rule); border-top:none;
+  }
+  .card > header h2 { margin:0; font-size:12px; text-transform:uppercase; letter-spacing:.07em; color:var(--ink-faint); font-weight:700; }
+
+  /* ── cases ── */
+  ul.cases { list-style:none; margin:0; padding:0; max-height:min(72vh,760px); overflow-y:auto; }
+  ul.cases li { border-bottom:1px solid var(--rule); font-size:13px; }
+  ul.cases li:last-child { border-bottom:none; }
+  ul.cases li.running .case-row { background:var(--accent-soft); }
+  .case-row { display:flex; align-items:center; gap:10px; padding:8px 14px; cursor:pointer; }
+  .case-row:hover { background:var(--inset); }
+  .pill { font-size:10px; font-weight:700; padding:2px 7px; border-radius:4px; border:1.5px solid transparent; flex:0 0 auto; min-width:44px; text-align:center; }
+  .pill.ok { background:var(--ok-soft); color:var(--ok-ink); border-color:var(--ok); }
+  .pill.fail { background:var(--bad-soft); color:var(--bad-ink); border-color:var(--bad); }
+  .pill.none { background:var(--inset); color:var(--ink-faint); border-color:var(--rule-hard); }
+  .case-txt { flex:1; min-width:0; }
+  .case-txt .label { display:block; }
+  .case-txt .name { display:block; font-size:10.5px; color:var(--ink-faint); }
+  .http-count { font-size:10.5px; color:var(--ink-faint); flex:0 0 auto; }
+  .run1 {
+    background:none; border:1px solid var(--rule-hard); color:var(--ink-soft);
+    border-radius:6px; padding:4px 11px; font-size:11.5px; font-weight:600; flex:0 0 auto;
+  }
+  .run1:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); background:var(--accent-soft); }
+
+  /* ── tráfico HTTP por caso: lista compacta, el detalle se abre en modal ── */
+  .case-detail { padding:4px 14px 12px; background:var(--inset); display:flex; flex-direction:column; gap:6px; }
+  .http-row {
+    display:flex; align-items:center; gap:10px; padding:7px 10px;
+    background:var(--panel); border:1px solid var(--rule); border-radius:7px; cursor:pointer;
+  }
+  .http-row:hover { border-color:var(--accent); }
+  .http-row:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+  .mbadge {
+    font-size:10px; font-weight:800; letter-spacing:.02em; padding:2px 7px; border-radius:5px;
+    flex:0 0 auto; color:#fff; font-family:"SF Mono",ui-monospace,monospace;
+  }
+  .mbadge.GET { background:#1d5a87; }
+  .mbadge.POST { background:#2f6b46; }
+  .mbadge.PUT, .mbadge.PATCH { background:#9a6410; }
+  .mbadge.DELETE { background:#a3402c; }
+  .http-url { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink-soft); font-size:11.5px; }
+  .http-status { font-weight:700; flex:0 0 auto; font-size:11.5px; }
+  .http-status.ok { color:var(--ok); }
+  .http-status.fail { color:var(--bad); }
+  .http-arrow { color:var(--ink-faint); flex:0 0 auto; font-size:14px; }
+
+  /* ── modal de detalle de una llamada HTTP ── */
+  .modal-backdrop {
+    position:fixed; inset:0; background:rgba(10,13,16,.55); backdrop-filter:blur(2px);
+    display:flex; align-items:center; justify-content:center; padding:24px; z-index:100;
+  }
+  .modal {
+    background:var(--panel); border:1px solid var(--rule); border-radius:14px; width:min(760px,100%);
+    max-height:86vh; display:flex; flex-direction:column; box-shadow:0 20px 60px rgba(0,0,0,.35); overflow:hidden;
+  }
+  .modal > header { display:flex; align-items:center; gap:10px; padding:14px 16px; border-bottom:1px solid var(--rule); flex:0 0 auto; }
+  .modal-url { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; color:var(--ink-soft); }
+  .modal-close {
+    background:none; border:none; color:var(--ink-faint); font-size:16px; line-height:1; cursor:pointer;
+    padding:4px 6px; border-radius:6px; flex:0 0 auto;
+  }
+  .modal-close:hover { background:var(--inset); color:var(--ink); }
+  .modal-body { overflow-y:auto; padding:14px 16px 18px; display:flex; flex-direction:column; gap:16px; }
+  .msec-title {
+    display:flex; align-items:center; justify-content:space-between; font-size:10.5px; text-transform:uppercase;
+    letter-spacing:.06em; color:var(--ink-faint); font-weight:700; margin-bottom:6px;
+  }
+  .copy-btn {
+    background:none; border:1px solid var(--rule-hard); color:var(--ink-soft); border-radius:5px;
+    padding:2px 8px; font-size:10px; font-weight:600; text-transform:none; letter-spacing:0; cursor:pointer;
+  }
+  .copy-btn:hover { border-color:var(--accent); color:var(--accent); }
+  .copy-btn.copied { border-color:var(--ok); color:var(--ok); }
+  .code-block {
+    margin:0; font-size:11.5px; line-height:1.55; white-space:pre-wrap; word-break:break-word;
+    background:var(--inset); border:1px solid var(--rule); border-radius:8px; padding:10px 12px;
+    max-height:280px; overflow:auto;
+  }
+  table.hdrs { width:100%; border-collapse:collapse; font-size:11.5px; }
+  table.hdrs td { padding:5px 8px; border-bottom:1px solid var(--rule); vertical-align:top; word-break:break-all; }
+  table.hdrs tr:last-child td { border-bottom:none; }
+  td.hk { color:var(--ink-faint); white-space:nowrap; width:1%; padding-right:14px; }
+  .auth-decoded {
+    margin-top:6px; padding:8px 10px; background:var(--inset); border:1px dashed var(--rule-hard);
+    border-radius:7px; font-size:11px;
+  }
+  .auth-decoded-lbl { font-size:9.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); font-weight:700; margin-bottom:5px; }
+  .auth-decoded pre { margin:0 0 6px; white-space:pre-wrap; word-break:break-word; }
+  .auth-decoded pre:last-child { margin-bottom:0; }
+  .jk { color:var(--accent); }
+  .js { color:var(--ok); }
+  .jn { color:var(--warn); }
+  .jb, .jz { color:var(--bad); }
+
+  /* ── log ── */
+  .log-head select { font:inherit; font-size:12px; padding:3px 6px; border-radius:5px; border:1px solid var(--rule-hard); background:var(--panel); color:var(--ink); }
+  .log { max-height:min(72vh,760px); overflow:auto; padding:8px 0; font-size:11.5px; line-height:1.5; }
+  .log .ln { display:flex; gap:8px; padding:1px 14px; white-space:pre-wrap; word-break:break-word; }
+  .log .ln:hover { background:var(--inset); }
+  .log .t { color:var(--ink-faint); flex:0 0 60px; }
+  .log .s { flex:0 0 104px; color:var(--accent); }
+  .log .m { flex:1; min-width:0; }
+  .log .ln.ERROR .m { color:var(--bad-ink); }
+  .log .ln.WARN .m { color:var(--warn-ink); }
+  .log .ln.out .m { color:var(--ink); }
+  .log .ln.PASS .m { color:var(--ok-ink); }
+  .log .ln.FAIL .m { color:var(--bad-ink); font-weight:600; }
+  .empty { padding:26px 14px; text-align:center; color:var(--ink-faint); font-size:12.5px; }
+
+  /* ── db table ── */
+  section.db { margin-top:18px; }
+  .tscroll { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th,td { text-align:left; padding:7px 12px; border-bottom:1px solid var(--rule); white-space:nowrap; }
+  th { font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); font-weight:700; }
+  td.null { color:var(--ink-faint); }
+  .tag { font-size:10.5px; font-weight:700; padding:1.5px 6px; border-radius:4px; background:var(--inset); color:var(--ink-soft); }
+  .tag.on { background:var(--warn-soft); color:var(--warn-ink); }
+  .tag.done { background:var(--ok-soft); color:var(--ok-ink); }
+  .tag.dead { background:var(--bad-soft); color:var(--bad-ink); }
+  footer.note { margin-top:22px; font-size:11.5px; color:var(--ink-faint); }
+  footer.note code { font-size:11px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>Panel E2E</h1>
+    <select class="flow-pick mono" id="flowPick" title="Flujo a probar"></select>
+    <span class="flow-desc" id="flowDesc"></span>
+    <div class="spacer"></div>
+    <div class="summary" id="summary"></div>
+    <button class="btn" id="btnSeed">↺ Resembrar</button>
+    <button class="btn primary" id="btnAll">▸ Correr todo</button>
+  </header>
+
+  <section class="chain">
+    <div class="sec-title">Cadena — clic en un nodo para filtrar su log</div>
+    <div class="chain-scroll"><div class="chain-row" id="chain"></div></div>
+  </section>
+
+  <div class="cols">
+    <div class="card">
+      <header><h2>Casos</h2><span class="mono" id="caseCount" style="font-size:11px;color:var(--ink-faint)"></span></header>
+      <ul class="cases" id="cases"><li><span class="empty">cargando…</span></li></ul>
+    </div>
+
+    <div class="card">
+      <header class="log-head">
+        <h2>Log</h2>
+        <select id="logFilter"></select>
+      </header>
+      <div class="log" id="log"><div class="empty">cargando…</div></div>
+    </div>
+  </div>
+
+  <section class="db card" style="margin-top:18px">
+    <header><h2>Estado en la base de BCB</h2><span style="font-size:11px;color:var(--ink-faint)">se refresca solo</span></header>
+    <div class="tscroll"><table id="db"></table></div>
+  </section>
+
+  <footer class="note">
+    Solo lectura y ejecución de casos. Levantar o bajar el stack, y recrear la base, se hacen desde el CLI:
+    <code>./e2e up tomtom</code> · <code>./e2e down tomtom</code> · <code>./e2e psql tomtom</code>
+  </footer>
+</div>
+<div id="modalRoot"></div>
+
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+let state = null;
+let busy = false;
+/**
+ * Flujo elegido. Prioridad: ?flow= en la URL (así el enlace es compartible y
+ * marcable), luego lo último que elegiste, y si no, el default del servidor.
+ */
+let currentFlow =
+  new URLSearchParams(location.search).get('flow') || localStorage.getItem('e2e.flow') || '';
+/** Sufijo de flujo para toda llamada a la API: una sola fuente, sin olvidos. */
+const q = (extra = '') => (currentFlow ? `?flow=${encodeURIComponent(currentFlow)}${extra ? '&' + extra : ''}` : (extra ? `?${extra}` : ''));
+let runLines = [];
+let selectedNode = null;
+/** Caso cuyo tráfico HTTP (request/response) está desplegado en la lista. */
+let expandedCase = null;
+
+// ── Selector de flujo ─────────────────────────────────────────────────────
+/** Opciones de log del flujo activo; sin esto el panel mezclaba logs de otro. */
+function renderLogFilter() {
+  const sel = $('logFilter');
+  const previo = sel.value;
+  const servicios = state.services || [];
+  const opciones = [
+    { v: 'all', t: 'Todos los servicios' },
+    { v: 'run', t: 'Salida de la corrida' },
+    ...servicios.map((s2) => ({ v: s2, t: s2 })),
+  ];
+  const firma = opciones.map((o) => o.v).join('|');
+  if (sel.dataset.firma !== firma) {
+    sel.innerHTML = opciones.map((o) => `<option value="${esc(o.v)}">${esc(o.t)}</option>`).join('');
+    sel.dataset.firma = firma;
+    sel.value = opciones.some((o) => o.v === previo) ? previo : 'all';
+  }
+}
+
+function renderFlowPicker() {
+  const flows = state.flows || [];
+  const pick = $('flowPick');
+  if (pick.options.length !== flows.length) {
+    pick.innerHTML = flows.map((f) => `<option value="${esc(f.name)}">${esc(f.name)}</option>`).join('');
+  }
+  pick.value = state.flow || '';
+  const desc = flows.find((f) => f.name === state.flow)?.description || '';
+  $('flowDesc').textContent = desc;
+}
+
+$('flowPick').addEventListener('change', async () => {
+  currentFlow = $('flowPick').value;
+  localStorage.setItem('e2e.flow', currentFlow);
+  // La URL refleja el flujo activo, para poder compartirla o recargar sin perderlo.
+  history.replaceState(null, '', `?flow=${encodeURIComponent(currentFlow)}`);
+  // Al cambiar de flujo nada de lo anterior aplica: se limpia para no mostrar
+  // resultados de un flujo con el nombre de otro.
+  runLines = [];
+  selectedNode = null;
+  expandedCase = null;
+  $('logFilter').value = 'all';
+  await refreshState();
+  await refreshLog();
+});
+
+// ── Cadena ────────────────────────────────────────────────────────────────
+function renderChain(nodes) {
+  const parts = [];
+  nodes.forEach((n, i) => {
+    if (i) parts.push('<div class="arrow">→</div>');
+    const cls = ['node'];
+    if (n.up === false) cls.push('down');
+    if (selectedNode === n.id) cls.push('sel');
+    const dot = n.up === true ? 'up' : n.up === false ? 'down' : '';
+    const metrics = n.metrics
+      ? '<div class="metrics">' +
+        Object.entries(n.metrics)
+          .map(([k, v]) => `<div><b class="${k === 'DLQ' && v > 0 ? 'alert' : ''}">${v}</b>${esc(k)}</div>`)
+          .join('') +
+        '</div>'
+      : '';
+    const err = n.error ? `<div class="err">${esc(n.error)}</div>` : '';
+    const note = n.note && n.up === null ? `<div class="sub">${esc(n.note)}</div>` : '';
+    // Solo los nodos con log propio son clicables.
+    const clickable = (state.services || []).includes(n.id);
+    parts.push(
+      `<div class="${cls.join(' ')}" ${clickable ? `role="button" tabindex="0" data-node="${n.id}"` : ''}>
+         <div class="top"><span class="dot ${dot}"></span><span class="name">${esc(n.label)}</span></div>
+         <div class="sub">${esc(n.sub)}</div>${note}${metrics}${err}
+       </div>`,
+    );
+  });
+  $('chain').innerHTML = parts.join('');
+  $('chain')
+    .querySelectorAll('[data-node]')
+    .forEach((el) => {
+      const pick = () => {
+        const id = el.dataset.node;
+        selectedNode = selectedNode === id ? null : id;
+        $('logFilter').value = selectedNode || 'run';
+        renderChain(state.nodes);
+        refreshLog();
+      };
+      el.addEventListener('click', pick);
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); }
+      });
+    });
+}
+
+// ── Casos ─────────────────────────────────────────────────────────────────
+/** Tráfico HTTP (request/response) de un caso: lista compacta, clic → modal. */
+function renderHttpCalls(caseName, calls) {
+  if (!calls.length) {
+    return '<div class="case-detail"><div class="empty">Sin llamadas HTTP registradas — corré el caso para verlas.</div></div>';
+  }
+  return (
+    '<div class="case-detail">' +
+    calls
+      .map((c, i) => {
+        const ok = c.status >= 200 && c.status < 300;
+        return `<div class="http-row" data-case="${esc(caseName)}" data-i="${i}" role="button" tabindex="0">
+          <span class="mbadge ${esc(c.method)}">${esc(c.method)}</span>
+          <span class="http-url mono" title="${esc(c.url)}">${esc(c.url)}</span>
+          <span class="http-status mono ${ok ? 'ok' : 'fail'}">${esc(c.status)}</span>
+          <span class="http-arrow">›</span>
+        </div>`;
+      })
+      .join('') +
+    '</div>'
+  );
+}
+
+function renderCases() {
+  const results = (state.results && state.results.cases) || {};
+  const traffic = state.traffic || [];
+  $('caseCount').textContent = `${state.cases.length} casos`;
+  $('cases').innerHTML = state.cases
+    .map((c) => {
+      const r = results[c.name];
+      const pill = r === 'ok' ? 'ok' : r === 'fail' ? 'fail' : 'none';
+      const txt = r === 'ok' ? 'PASS' : r === 'fail' ? 'FAIL' : '—';
+      const calls = traffic.filter((e) => e.case === c.name);
+      const open = expandedCase === c.name;
+      return `<li data-case="${esc(c.name)}"${open ? ' class="open"' : ''}>
+        <div class="case-row">
+          <span class="pill ${pill}">${txt}</span>
+          <span class="case-txt"><span class="label">${esc(c.label)}</span><span class="name mono">${esc(c.name)}</span></span>
+          ${calls.length ? `<span class="http-count mono">${calls.length} req</span>` : ''}
+          <button class="run1" data-run="${esc(c.name)}" ${busy ? 'disabled' : ''} title="Correr solo este caso">correr</button>
+        </div>
+        ${open ? renderHttpCalls(c.name, calls) : ''}
+      </li>`;
+    })
+    .join('');
+  $('cases')
+    .querySelectorAll('.case-row')
+    .forEach((row) => {
+      row.addEventListener('click', (e) => {
+        if (e.target.closest('[data-run]')) return;
+        const name = row.closest('[data-case]').dataset.case;
+        expandedCase = expandedCase === name ? null : name;
+        renderCases();
+      });
+    });
+  $('cases')
+    .querySelectorAll('[data-run]')
+    .forEach((b) => b.addEventListener('click', () => runCase(b.dataset.run)));
+  $('cases')
+    .querySelectorAll('.http-row')
+    .forEach((row) => {
+      const open = () => {
+        const calls = (state.traffic || []).filter((e) => e.case === row.dataset.case);
+        const entry = calls[Number(row.dataset.i)];
+        if (entry) openHttpModal(entry);
+      };
+      row.addEventListener('click', open);
+      row.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+      });
+    });
+}
+
+// ── Modal de detalle HTTP: headers, credenciales decodificadas, bodies, curl ──
+/** Resalta JSON ya serializado con `JSON.stringify(v, null, 2)`. */
+function syntaxHighlight(json) {
+  const safe = esc(json);
+  return safe.replace(
+    /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false)\b|null|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g,
+    (match) => {
+      let cls = 'jn';
+      if (/^"/.test(match)) cls = /:$/.test(match) ? 'jk' : 'js';
+      else if (/true|false/.test(match)) cls = 'jb';
+      else if (/null/.test(match)) cls = 'jz';
+      return `<span class="${cls}">${match}</span>`;
+    },
+  );
+}
+
+function b64urlDecode(str) {
+  let s = str.replace(/-/g, '+').replace(/_/g, '/');
+  while (s.length % 4) s += '=';
+  const bin = atob(s);
+  try {
+    return decodeURIComponent(
+      bin.split('').map((c) => '%' + c.charCodeAt(0).toString(16).padStart(2, '0')).join(''),
+    );
+  } catch {
+    return bin;
+  }
+}
+
+/** JWT sin verificar firma — solo para mostrar los claims, es un panel de diagnóstico local. */
+function decodeJwt(token) {
+  const parts = token.split('.');
+  if (parts.length < 2) return null;
+  try {
+    return { header: JSON.parse(b64urlDecode(parts[0])), payload: JSON.parse(b64urlDecode(parts[1])) };
+  } catch {
+    return null;
+  }
+}
+
+/** Describe un header `Authorization`: esquema + credencial decodificada. */
+function describeAuth(value) {
+  const sp = value.indexOf(' ');
+  const scheme = sp === -1 ? value : value.slice(0, sp);
+  const rest = sp === -1 ? '' : value.slice(sp + 1);
+  if (/^Bearer$/i.test(scheme)) return { scheme: 'Bearer', jwt: decodeJwt(rest) };
+  if (/^Basic$/i.test(scheme)) {
+    let decoded = '';
+    try {
+      decoded = atob(rest);
+    } catch {
+      return { scheme: 'Basic' };
+    }
+    const idx = decoded.indexOf(':');
+    return { scheme: 'Basic', user: idx >= 0 ? decoded.slice(0, idx) : decoded, pass: idx >= 0 ? decoded.slice(idx + 1) : '' };
+  }
+  return { scheme };
+}
+
+function renderAuthDetail(auth) {
+  if (auth.jwt) {
+    return `<div class="auth-decoded">
+      <div class="auth-decoded-lbl">JWT decodificado (sin verificar firma — es un panel local)</div>
+      <pre class="mono">${syntaxHighlight(JSON.stringify(auth.jwt.header, null, 2))}</pre>
+      <pre class="mono">${syntaxHighlight(JSON.stringify(auth.jwt.payload, null, 2))}</pre>
+    </div>`;
+  }
+  if (auth.user !== undefined) {
+    return `<div class="auth-decoded">
+      <div class="auth-decoded-lbl">Basic decodificado</div>
+      <div class="mono">usuario: ${esc(auth.user)}</div>
+      <div class="mono">contraseña: ${esc(auth.pass)}</div>
+    </div>`;
+  }
+  return '';
+}
+
+function renderHeadersTable(headers) {
+  const rows = Object.entries(headers || {});
+  if (!rows.length) return '<div class="empty" style="padding:14px">Sin headers registrados.</div>';
+  return (
+    '<table class="hdrs">' +
+    rows
+      .map(([k, v]) => {
+        const detail = /^authorization$/i.test(k) ? renderAuthDetail(describeAuth(v)) : '';
+        return `<tr><td class="hk mono">${esc(k)}</td><td class="hv mono">${esc(v)}${detail}</td></tr>`;
+      })
+      .join('') +
+    '</table>'
+  );
+}
+
+/** `null`/vacío se muestra como raya; string tal cual; objeto como JSON resaltado. */
+function bodyBlock(label, value) {
+  const empty = value === null || value === undefined || value === '';
+  const raw = empty ? '' : typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  const rendered = empty ? '' : typeof value === 'string' ? esc(value) : syntaxHighlight(raw);
+  return `<div class="msec">
+    <div class="msec-title">${esc(label)}${raw ? `<button class="copy-btn" data-copy="${esc(encodeURIComponent(raw))}">copiar</button>` : ''}</div>
+    ${empty ? '<div class="empty" style="padding:10px">—</div>' : `<pre class="code-block mono">${rendered}</pre>`}
+  </div>`;
+}
+
+function closeHttpModal() {
+  $('modalRoot').innerHTML = '';
+}
+
+function openHttpModal(entry) {
+  const ok = entry.status >= 200 && entry.status < 300;
+  const curl = buildCurl(entry);
+  $('modalRoot').innerHTML = `<div class="modal-backdrop" id="modalBackdrop">
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Detalle de la petición">
+      <header>
+        <span class="mbadge ${esc(entry.method)}">${esc(entry.method)}</span>
+        <span class="modal-url mono" title="${esc(entry.url)}">${esc(entry.url)}</span>
+        <span class="http-status mono ${ok ? 'ok' : 'fail'}">${esc(entry.status)}</span>
+        <button class="modal-close" id="modalClose" aria-label="Cerrar">✕</button>
+      </header>
+      <div class="modal-body">
+        <div class="msec">
+          <div class="msec-title">Caso</div>
+          <div class="mono" style="padding:2px 0">${esc(entry.case || '—')} · ${esc(new Date(entry.at).toLocaleString())}</div>
+        </div>
+        <div class="msec"><div class="msec-title">Request headers</div>${renderHeadersTable(entry.reqHeaders)}</div>
+        ${bodyBlock('Request body', entry.reqBody)}
+        ${bodyBlock('Response body', entry.resBody)}
+        <div class="msec">
+          <div class="msec-title">Reproducir<button class="copy-btn" data-copy="${esc(encodeURIComponent(curl))}">copiar</button></div>
+          <pre class="code-block mono">${esc(curl)}</pre>
+        </div>
+      </div>
+    </div>
+  </div>`;
+  $('modalClose').addEventListener('click', closeHttpModal);
+  $('modalBackdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'modalBackdrop') closeHttpModal();
+  });
+  $('modalRoot')
+    .querySelectorAll('.copy-btn')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        navigator.clipboard.writeText(decodeURIComponent(btn.dataset.copy)).then(() => {
+          const prev = btn.textContent;
+          btn.textContent = 'copiado';
+          btn.classList.add('copied');
+          setTimeout(() => {
+            btn.textContent = prev;
+            btn.classList.remove('copied');
+          }, 1200);
+        });
+      });
+    });
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && $('modalRoot').firstChild) closeHttpModal();
+});
+
+/** Un solo comando reproducible a mano, credenciales incluidas. */
+function shQuote(s) {
+  return `'${String(s).replace(/'/g, "'\\''")}'`;
+}
+function buildCurl(entry) {
+  const parts = ['curl', '-i', '-X', entry.method, shQuote(entry.url)];
+  Object.entries(entry.reqHeaders || {}).forEach(([k, v]) => parts.push('-H', shQuote(`${k}: ${v}`)));
+  if (entry.reqBody !== null && entry.reqBody !== undefined) {
+    const body = typeof entry.reqBody === 'string' ? entry.reqBody : JSON.stringify(entry.reqBody);
+    parts.push('-d', shQuote(body));
+  }
+  return parts.join(' ');
+}
+
+// El encabezado cuenta CASOS, no aserciones: es la unidad que le importa a
+// quien mira. Se calcula del mapa fusionado, así correr un caso suelto no
+// hace parecer que los demás desaparecieron.
+function renderSummary() {
+  const cases = (state.results && state.results.cases) || {};
+  const total = (state.cases || []).length;
+  const vals = Object.values(cases);
+  const ok = vals.filter((v) => v === 'ok').length;
+  const fail = vals.filter((v) => v === 'fail').length;
+  if (!vals.length) {
+    $('summary').innerHTML = `<span class="lbl">sin correr todavía</span>`;
+    return;
+  }
+  const pending = Math.max(0, total - ok - fail);
+  $('summary').innerHTML =
+    `<span class="big" style="color:var(--ok)">${ok}</span><span class="lbl">ok</span>` +
+    (fail ? `<span class="big" style="color:var(--bad)">${fail}</span><span class="lbl">fail</span>` : '') +
+    (pending ? `<span class="lbl">· ${pending} sin correr</span>` : '');
+}
+
+// ── Base de datos ─────────────────────────────────────────────────────────
+const TAGS = {
+  ON_TRIP: 'on', DISPATCHED: 'on', OPEN: '',
+  CONFIRMED: 'done', FINISHED: 'done', ACTIVE: 'done', AVAILABLE: 'done',
+  CANCELLED: 'dead', CANCELLED_BY_GROUP: 'dead',
+};
+const HEADS = {
+  esc: 'esc', corrida: 'corrida', despacho_admin: 'despacho admin',
+  salida_real: 'salida real', llegada_real: 'llegada real',
+  tarjeta: 'tarjeta', bus: 'bus', bus_en: 'bus en', operador: 'operador',
+};
+function renderDb() {
+  const rows = state.db || [];
+  if (!rows.length) { $('db').innerHTML = '<tr><td class="empty">Sin escenarios sembrados.</td></tr>'; return; }
+  const cols = Object.keys(rows[0]);
+  const head = '<tr>' + cols.map((c) => `<th>${esc(HEADS[c] || c)}</th>`).join('') + '</tr>';
+  const body = rows
+    .map(
+      (r) =>
+        '<tr>' +
+        cols
+          .map((c) => {
+            const v = r[c];
+            if (v === null || v === undefined || v === '') return '<td class="null">—</td>';
+            const t = TAGS[v];
+            return t !== undefined ? `<td><span class="tag ${t}">${esc(v)}</span></td>` : `<td class="mono">${esc(v)}</td>`;
+          })
+          .join('') +
+        '</tr>',
+    )
+    .join('');
+  $('db').innerHTML = head + body;
+}
+
+// ── Log ───────────────────────────────────────────────────────────────────
+function classify(line) {
+  if (/^PASS /.test(line)) return 'PASS';
+  if (/^FAIL /.test(line)) return 'FAIL';
+  if (/^✗|falló|error/i.test(line)) return 'ERROR';
+  return 'out';
+}
+function paintRunLines() {
+  const box = $('log');
+  if (!runLines.length) { box.innerHTML = '<div class="empty">Corré algo para ver la salida acá.</div>'; return; }
+  box.innerHTML = runLines.map((l) => `<div class="ln ${classify(l)}"><span class="m">${esc(l)}</span></div>`).join('');
+  box.scrollTop = box.scrollHeight;
+}
+async function refreshLog() {
+  const mode = $('logFilter').value;
+  if (mode === 'run') return paintRunLines();
+  const entries = await fetch(`/api/logs${q('service=' + encodeURIComponent(mode))}`).then((r) => r.json());
+  const box = $('log');
+  box.innerHTML = entries.length
+    ? entries
+        .map(
+          (e) =>
+            `<div class="ln ${esc(e.level)}"><span class="t mono">${esc(e.ts)}</span>` +
+            `<span class="s mono">${esc(e.service)}</span><span class="m">${esc(e.msg)}</span></div>`,
+        )
+        .join('')
+    : '<div class="empty">Sin líneas todavía.</div>';
+  box.scrollTop = box.scrollHeight;
+}
+$('logFilter').addEventListener('change', () => {
+  selectedNode = (state?.services || []).includes($('logFilter').value) ? $('logFilter').value : null;
+  if (state) renderChain(state.nodes);
+  refreshLog();
+});
+
+// ── Corridas ──────────────────────────────────────────────────────────────
+function setBusy(on) {
+  busy = on;
+  $('btnAll').disabled = on;
+  $('btnSeed').disabled = on;
+  document.querySelectorAll('[data-run]').forEach((b) => (b.disabled = on));
+}
+
+async function stream(url, caseName) {
+  setBusy(true);
+  runLines = [];
+  $('logFilter').value = 'run';
+  selectedNode = null;
+  if (caseName) {
+    const li = document.querySelector(`li[data-case="${caseName}"]`);
+    if (li) li.classList.add('running');
+  }
+  try {
+    const res = await fetch(url, { method: 'POST' });
+    if (!res.ok || !res.body) {
+      runLines.push(`no se pudo iniciar: ${res.status}`);
+      paintRunLines();
+      return;
+    }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const frames = buf.split('\n\n');
+      buf = frames.pop() ?? '';
+      for (const f of frames) {
+        const ev = (f.match(/^event: (.+)$/m) || [, ''])[1];
+        const dm = f.match(/^data: (.*)$/m);
+        if (!dm) continue;
+        const data = JSON.parse(dm[1]);
+        if (ev === 'line') { runLines.push(data); paintRunLines(); }
+      }
+    }
+  } finally {
+    document.querySelectorAll('li.running').forEach((li) => li.classList.remove('running'));
+    setBusy(false);
+    await refreshState();
+  }
+}
+
+const runAll = () => stream(`/api/run${q()}`);
+const runCase = (name) => stream(`/api/run${q('case=' + encodeURIComponent(name))}`, name);
+$('btnAll').addEventListener('click', runAll);
+$('btnSeed').addEventListener('click', () => stream(`/api/seed${q()}`));
+
+// ── Estado ────────────────────────────────────────────────────────────────
+async function refreshState() {
+  try {
+    state = await fetch(`/api/state${q()}`).then((r) => r.json());
+    currentFlow = state.flow || currentFlow;
+  } catch { return; }
+  renderFlowPicker();
+  renderLogFilter();
+  document.title = `Panel E2E · ${state.flow || ''}`;
+  renderChain(state.nodes || []);
+  renderCases();
+  renderSummary();
+  renderDb();
+  if ($('logFilter').value !== 'run') refreshLog();
+}
+
+refreshState();
+refreshLog();
+// Mientras hay una corrida en curso no se sondea: el estado va a cambiar de
+// todos modos al terminar, y sondear encima ensucia la lectura.
+setInterval(() => { if (!busy) refreshState(); }, 4000);
+</script>
+</body>
+</html>
