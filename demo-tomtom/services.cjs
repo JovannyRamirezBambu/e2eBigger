@@ -209,15 +209,15 @@ const cu04 = {
   nombre: 'Salida de la terminal',
   alias: 'CU04',
   metodo: 'POST',
-  ruta: '/tomtom/geocercas',
-  auth: 'JWT RS256 (firmado por adapter-tomtom)',
-  quienLlama: 'Un proceso programado, cada 30 minutos',
+  ruta: '/tomtom/eventos-geocerca',
+  auth: 'Token del webhook (INROUTE_WEBHOOK_TOKEN)',
+  quienLlama: 'TomTom/InRoute, al detectar el cruce (webhook)',
   direccion: 'InRoute → BIGER → BCB',
   resumen: 'La unidad cruza la geocerca de la terminal y la corrida queda despachada en BCB, con su hora real.',
 
   explicacion: [
     'Cuando la unidad sale físicamente de la terminal, su GPS cruza la **geocerca de origen** y TomTom lo registra. Eso es lo más cercano a la verdad que hay sobre a qué hora salió realmente la corrida.',
-    'InRoute **no avisa**: no tiene webhooks. Es el satélite el que pregunta cada 30 minutos si hubo cruces en la ventana reciente. Este botón dispara esa misma consulta, sin esperar al reloj.',
+    'El DCU define el modelo como **webhook**: TomTom empuja cada cruce al satélite en tiempo real (POST /tomtom/eventos-geocerca, respuesta 202) — el endpoint de consulta nunca existió en el API real (404). Este botón hace el mismo POST que hará el InRoute de Adsum.',
     'Si el cruce corresponde a un viaje activo y cae dentro de la ventana permitida, el satélite avisa a BCB —por una cola durable, para que el evento no se pierda si BCB está caído— y la corrida queda **despachada con su hora real**, el autobús pasa a "en viaje", y la operación deja de depender de que alguien lo capture a mano.',
   ],
 
@@ -233,7 +233,7 @@ const cu04 = {
   actores: [A('unidad'), A('inroute'), A('satelite'), A('adapterTt'), A('jetstream'), A('adapterBcb'), A('appBcb'), A('bdBcb')],
   pasos: [
     { de: 'unidad', a: 'inroute', texto: 'La unidad cruza la geocerca de origen', detalle: 'El GPS reporta la salida (nTipo = 2)' },
-    { de: 'inroute', a: 'satelite', texto: 'El satélite pregunta si hubo cruces', detalle: 'GET /eventosGeocerca de la ventana reciente' },
+    { de: 'inroute', a: 'satelite', texto: 'TomTom empuja el evento al webhook', detalle: 'POST /tomtom/eventos-geocerca (202 · regla <5 s del DCU)' },
     { de: 'satelite', a: 'adapter-tomtom', texto: 'Avisa el despacho', detalle: 'POST /tomtom/corridas/{corrida}/despachar con su JWT' },
     { de: 'adapter-tomtom', a: 'jetstream', texto: 'Se encola durable', detalle: 'TOMTOM_GEOCERCAS_STREAM · no se pierde si BCB está caído' },
     { de: 'jetstream', a: 'adapter-bcb', texto: 'Lo toma el adaptador de BCB', detalle: 'Consumidor durable tomtom-geocercas-workers' },
@@ -253,14 +253,9 @@ const cu04 = {
 
   entradas: [
     {
-      id: 'adapter',
-      label: 'Desde el proceso programado',
-      ayuda: 'Publica biger.tomtom.geocercas.sync, igual que el cron de las 30 minutos. Recorre la cadena completa.',
-    },
-    {
       id: 'satelite',
-      label: 'Directo al satélite',
-      ayuda: 'Dispara el polling llamando al satélite, saltando la mensajería interna.',
+      label: 'Webhook del satélite',
+      ayuda: 'POST /tomtom/eventos-geocerca con el token del webhook — el mismo camino que usará el InRoute de Adsum.',
     },
   ],
 
@@ -307,9 +302,9 @@ const cu05 = {
   nombre: 'Llegada a destino',
   alias: 'CU05',
   metodo: 'POST',
-  ruta: '/tomtom/geocercas',
-  auth: 'JWT RS256 (firmado por adapter-tomtom)',
-  quienLlama: 'Un proceso programado, cada 30 minutos',
+  ruta: '/tomtom/eventos-geocerca',
+  auth: 'Token del webhook (INROUTE_WEBHOOK_TOKEN)',
+  quienLlama: 'TomTom/InRoute, al detectar el cruce (webhook)',
   direccion: 'InRoute → BIGER → BCB',
   resumen: 'La unidad entra a la geocerca de la terminal destino: se confirma la tarjeta y quedan libres el autobús y el operador.',
 
@@ -331,7 +326,7 @@ const cu05 = {
   actores: [A('unidad'), A('inroute'), A('satelite'), A('adapterTt'), A('jetstream'), A('adapterBcb'), A('appBcb'), A('bdBcb')],
   pasos: [
     { de: 'unidad', a: 'inroute', texto: 'La unidad entra a la geocerca de destino', detalle: 'El GPS reporta la entrada (nTipo = 1)' },
-    { de: 'inroute', a: 'satelite', texto: 'El satélite pregunta si hubo cruces', detalle: 'GET /eventosGeocerca de la ventana reciente' },
+    { de: 'inroute', a: 'satelite', texto: 'TomTom empuja el evento al webhook', detalle: 'POST /tomtom/eventos-geocerca (202 · regla <5 s del DCU)' },
     { de: 'satelite', a: 'adapter-tomtom', texto: 'Avisa la llegada', detalle: 'POST /tomtom/tarjetas-viaje/{tarjeta}/confirmar-llegada' },
     { de: 'adapter-tomtom', a: 'jetstream', texto: 'Se encola durable', detalle: 'TOMTOM_GEOCERCAS_STREAM' },
     { de: 'jetstream', a: 'adapter-bcb', texto: 'Lo toma el adaptador de BCB', detalle: '' },
