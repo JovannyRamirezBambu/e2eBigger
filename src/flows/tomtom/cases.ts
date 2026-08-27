@@ -45,6 +45,38 @@ const llegadaPara = (s: typeof scenarios.VALIDACIONES, over: Partial<ConfirmarLl
   ...over,
 });
 
+const SAT_URL = process.env.E2E_SAT_URL ?? 'http://localhost:3003';
+const FAKE_INROUTE = process.env.E2E_FAKE_INROUTE_URL ?? 'http://localhost:7803';
+const WEBHOOK_TOKEN = process.env.E2E_INROUTE_WEBHOOK_TOKEN ?? 'e2e-webhook-token';
+
+/** Habla con el satélite TomTom como lo hace adapter-tomtom: firmando con su llave. */
+const sat = new SatelliteClient(SAT_URL, { leg: 'adapter-tt', subject: 'adapter-tomtom' });
+
+/** Administración del InRoute falso (rutas __e2e del standalone). */
+async function fakeInroute<T = Record<string, unknown>>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${FAKE_INROUTE}${path}`, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  return (await res.json()) as T;
+}
+
+/** Empuja un evento de geocerca al webhook del satélite (CU03 — como lo haría TomTom). */
+async function webhookEvento(body: {
+  nVehiculo: number;
+  nGeoCerca: number;
+  nTipo: 1 | 2;
+  dFechaHoraEvento: string;
+}): Promise<{ status: number; body: { processed?: boolean; motivo?: string } }> {
+  const res = await fetch(`${SAT_URL}/tomtom/eventos-geocerca`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${WEBHOOK_TOKEN}` },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: (await res.json().catch(() => ({}))) as { processed?: boolean; motivo?: string } };
+}
+
 const trip = (id: string) => bcbDb().trip.findUnique({ where: { id } });
 const card = (id: string) => bcbDb().travelCard.findUnique({ where: { id } });
 const bus = (id: string) => bcbDb().bus.findUnique({ where: { id } });
@@ -315,6 +347,156 @@ export const cases: CaseDef[] = [
       );
       t.is('CADENA CU05: tarjeta CONFIRMED', TravelCardStatus.CONFIRMED, (await card(cardId))?.status);
       t.is('CADENA CU05: bus en la terminal destino', catalog.destinoId, (await bus(s.busId))?.stationId);
+    },
+  },
+  {
+    name: 'cadena-cu01-webhook-t12',
+    label: 'CADENA · CU01 alta en InRoute → webhook CU03 → CU04 en BCB → T12 telemetría',
+    async run(t) {
+      const s8 = scenarios.CADENA_CU01;
+      const { tripId, cardId } = await createChainTrip(s8);
+
+      // La corrida existe en el InRoute falso (catálogos con el contrato real:
+      // cDriverNo, cObjectNo con relleno, grupos solo-nGrupo/cDescripcion).
+      const ids = await fakeInroute<{ nVehicleId: number; GEOCERCA_ORIGEN: number; GEOCERCA_DESTINO: number }>(
+        '/__e2e/corridas',
+        { economicNumber: `E2E-BUS-${s8.n}`, operatorKey: `E2E-OP-${s8.n}`, routeNumber: `E2E-R-${s8.n}`, routeName: 'CADENA CU01' },
+      );
+
+      // CU01 — contrato mínimo BCB + enriquecimiento de UUIDs para los callbacks.
+      const departure = new Date(Date.now() + 10 * 60_000);
+      const alta = await sat.post<{ nTripId: number | null; nOrderId: number | null }>(
+        '/tomtom/viajes',
+        {
+          claveERP: cardId,
+          tripId,
+          economicNumber: `E2E-BUS-${s8.n}`,
+          operatorKey: `E2E-OP-${s8.n}`,
+          routeId: `E2E-R-${s8.n}`,
+          service: 'Pullman Primera Clase',
+          operatorName: 'OPERADOR CADENA OCHO',
+          departure: departure.toISOString(),
+          busId: s8.busId,
+          operatorId: s8.operadorId,
+          destinationId: catalog.destinoId,
+        },
+      );
+      t.is('CU01: alta 201 (orden + viaje en InRoute)', 201, alta.status, alta.text);
+      t.is('CU01: nTripId asignado', true, (alta.body?.nTripId ?? 0) > 0, alta.text);
+      t.is('CU01: nOrderId asignado (regla 3008: viaje con orden)', true, (alta.body?.nOrderId ?? 0) > 0, alta.text);
+
+      // El viaje en el InRoute falso quedó Conformado (nEstatus 2, referencia GEF)
+      const estado = await fakeInroute<{ viajes: { cClaveERP: string; nStatusViaje: number }[]; ordenes: { cObjectNo: string }[] }>('/__e2e/estado');
+      const viajeInroute = estado.viajes.find((v) => v.cClaveERP === tripId);
+      t.is('CU01: viaje Conformado (nStatusViaje 2)', 2, viajeInroute?.nStatusViaje);
+
+      // CU03 — TomTom empuja la SALIDA de la geocerca de origen al webhook.
+      const ahoraInroute = () => {
+        const p = new Intl.DateTimeFormat('en-US', {
+          timeZone: 'America/Mexico_City', day: '2-digit', month: '2-digit', year: 'numeric',
+          hour: '2-digit', minute: '2-digit', hour12: false,
+        }).formatToParts(new Date());
+        const v = (t2: string) => p.find((x) => x.type === t2)!.value;
+        return `${v('day')}/${v('month')}/${v('year')} ${v('hour')}:${v('minute')}`;
+      };
+      const salida = await webhookEvento({
+        nVehiculo: ids.nVehicleId, nGeoCerca: ids.GEOCERCA_ORIGEN, nTipo: 2, dFechaHoraEvento: ahoraInroute(),
+      });
+      t.is('CU03: webhook salida → 202', 202, salida.status, JSON.stringify(salida.body));
+      t.is('CU03: evento procesado (corrida despachada)', true, salida.body.processed === true, salida.body.motivo);
+
+      // CU04 — el despacho viajó satélite → adapter → JetStream → BCB.
+      const { ok: despachada } = await untilEquals(async () => Boolean((await trip(tripId))?.realDepartureAt), true);
+      t.is('CU04: realDepartureAt registrado en BCB', true, despachada, 'revisá: ./e2e logs tomtom adapter-bcb');
+
+      // CU03/CU04 — ENTRADA a la geocerca de destino.
+      const llegada = await webhookEvento({
+        nVehiculo: ids.nVehicleId, nGeoCerca: ids.GEOCERCA_DESTINO, nTipo: 1, dFechaHoraEvento: ahoraInroute(),
+      });
+      t.is('CU03: webhook llegada → 202 procesado', true, llegada.status === 202 && llegada.body.processed === true, llegada.body.motivo);
+      const { ok: confirmada } = await untilEquals(async () => (await card(cardId))?.status, TravelCardStatus.CONFIRMED);
+      t.is('CU04: tarjeta CONFIRMED en BCB', true, confirmada);
+
+      // T12 — el viaje termina en InRoute; el sync del satélite empuja la telemetría a BCB.
+      await fakeInroute('/__e2e/terminar-viaje', { nViaje: alta.body!.nTripId });
+      const sync = await sat.post('/tomtom/viajes/sync', {});
+      t.is('T12: disparo del sync → 202', 202, sync.status, sync.text);
+      const { ok: conTelemetria } = await untilEquals(
+        async () => Boolean(await bcbDb().tomTomTripData.findUnique({ where: { travelCardId: cardId } })),
+        true,
+      );
+      t.is('T12: TomTomTripData poblada en BCB', true, conTelemetria, 'revisá: ./e2e logs tomtom adapter-bcb satelite-tomtom');
+      if (conTelemetria) {
+        const datos = await bcbDb().tomTomTripData.findUnique({ where: { travelCardId: cardId } });
+        t.is('T12: telemetría con distancia', true, (datos?.distanceKm ?? 0) > 0);
+        t.is('T12: estatus Terminado (6)', 6, datos?.tripStatus);
+      }
+    },
+  },
+  {
+    name: 'cadena-nats-bitacora',
+    label: 'CADENA · alta vía NATS y bitácora de sync en BCB',
+    async run(t) {
+      const s9 = scenarios.CADENA_NATS;
+      const { tripId, cardId } = await createChainTrip(s9);
+      await fakeInroute('/__e2e/corridas', {
+        economicNumber: `E2E-BUS-${s9.n}`, operatorKey: `E2E-OP-${s9.n}`, routeNumber: `E2E-R-${s9.n}`, routeName: 'CADENA NATS',
+      });
+
+      // Como adapter-bcb: publica el evento de viaje al subject que consume
+      // adapter-tomtom. El contrato mínimo + UUIDs de enriquecimiento.
+      const { publishRaw } = await import('@harness/nats');
+      const publicado = await publishRaw('biger.tomtom.viaje.crear', {
+        claveERP: cardId,
+        tripId,
+        economicNumber: `E2E-BUS-${s9.n}`,
+        operatorKey: `E2E-OP-${s9.n}`,
+        routeId: `E2E-R-${s9.n}`,
+        service: 'Pullman Primera Clase',
+        operatorName: 'OPERADOR CADENA NUEVE',
+        departure: new Date(Date.now() + 30 * 60_000).toISOString(),
+        description: '',
+        busId: s9.busId,
+        operatorId: s9.operadorId,
+        originId: '',
+        destinationId: catalog.destinoId,
+        nVehicleId: null, nDriverId: null, nGroupId: null, nTripInstructionId: null,
+      });
+      t.is('NATS: evento de viaje publicado', true, publicado);
+
+      // Cadena D: adapter-tomtom → satélite → InRoute falso, y el RESULTADO del
+      // sync regresa por JetStream hasta la bitácora de BCB.
+      const { ok: conBitacora } = await untilEquals(
+        async () => (await bcbDb().travelCardTomTomSync.count({ where: { travelCardId: cardId } })) > 0,
+        true,
+      );
+      t.is('BITÁCORA: TravelCardTomTomSync registrada en BCB', true, conBitacora, 'revisá: ./e2e logs tomtom adapter-tomtom adapter-bcb');
+
+      const { ok: conTripId } = await untilEquals(
+        async () => ((await card(cardId))?.tomTomTripId ?? 0) > 0,
+        true,
+      );
+      t.is('BITÁCORA: tomTomTripId poblado en la TravelCard', true, conTripId);
+      t.is('BITÁCORA: tomTomFailed en false', false, (await card(cardId))?.tomTomFailed);
+    },
+  },
+  {
+    name: 'webhook-auth',
+    label: 'CU03 · el webhook rechaza sin token y con token equivocado',
+    async run(t) {
+      const evento = { nVehiculo: 1, nGeoCerca: 1, nTipo: 2, dFechaHoraEvento: '11/08/2026 10:00' };
+      const sin = await fetch(`${SAT_URL}/tomtom/eventos-geocerca`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(evento),
+      });
+      t.is('CU03: sin Authorization → 401', 401, sin.status);
+      const malo = await fetch(`${SAT_URL}/tomtom/eventos-geocerca`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer token-equivocado' },
+        body: JSON.stringify(evento),
+      });
+      t.is('CU03: token equivocado → 401', 401, malo.status);
+      const malFormado = await webhookEvento({ nVehiculo: 1, nGeoCerca: 1, nTipo: 2, dFechaHoraEvento: 'ayer' });
+      t.is('CU03: timestamp inválido → 400 (contrato DCU)', 400, malFormado.status);
     },
   },
   {

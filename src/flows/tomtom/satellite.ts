@@ -7,9 +7,9 @@
  * repo para resolver alias de tsconfig; desde TypeScript el import directo
  * funciona y ese hack desaparece.
  *
- * Por qué este punto de entrada y no `POST /tomtom/geocercas`: ese endpoint hace
- * polling contra InRoute (servicio de terceros, sin sandbox). CU04/CU05 empiezan
- * justo después, cuando el satélite ya decidió que hubo un evento de geocerca.
+ * Por qué este punto de entrada: ejercita el tramo satélite→adapter de CU04/CU05
+ * de forma aislada. La cadena completa (webhook /tomtom/eventos-geocerca incluido)
+ * vive en el caso cadena-cu01-webhook-t12.
  */
 import { AdapterTomtomCallbackClient } from '../../../../BIGER_EstrellaRoja_TomTom/src/bcb/bcb.client';
 import { readKey } from '@harness/paths';

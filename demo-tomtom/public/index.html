@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TomTom · Demostración del ciclo de una corrida</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="barra">
+      <div class="marca">
+        <div class="marca-titulo">TomTom</div>
+        <div class="marca-sub">Satélite BIGER · InRoute (Adsum)</div>
+      </div>
+
+      <nav class="pestanas" id="pestanas"></nav>
+
+      <div class="barra-derecha">
+        <div class="semaforos" id="semaforos" title="Estado de los servicios"></div>
+        <button class="boton-icono" id="btn-config" title="Configuración">Configuración</button>
+      </div>
+    </header>
+
+    <div class="aviso-real" id="aviso-real" hidden>
+      Modo <strong>InRoute REAL</strong>: los viajes que se den de alta acá se registran de verdad en Adsum.
+    </div>
+
+    <main id="contenido"></main>
+
+    <!-- Panel de configuración -->
+    <div class="modal-fondo" id="modal-config" hidden>
+      <div class="modal">
+        <div class="modal-cabecera">
+          <h2>Configuración</h2>
+          <button class="boton-cerrar" data-cerrar>×</button>
+        </div>
+        <div class="modal-cuerpo" id="cuerpo-config"></div>
+      </div>
+    </div>
+
+    <!-- Detalle de una llamada -->
+    <div class="modal-fondo" id="modal-detalle" hidden>
+      <div class="modal modal-ancho">
+        <div class="modal-cabecera">
+          <h2 id="titulo-detalle">Detalle</h2>
+          <button class="boton-cerrar" data-cerrar>×</button>
+        </div>
+        <div class="modal-cuerpo" id="cuerpo-detalle"></div>
+      </div>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
