@@ -7,9 +7,29 @@
  * que importa cuando algo se descarta: por qué.
  */
 import { connect, nkeyAuthenticator, type NatsConnection, headers as natsHeaders } from 'nats';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const MONITOR = process.env.E2E_NATS_MONITOR ?? 'http://localhost:8222';
 const SERVERS = (process.env.E2E_NATS_URL ?? 'nats://localhost:4222').split(',');
+
+/**
+ * Seed NKEY para el cliente real. El NATS local exige NKEY (igual que AWS); la
+ * seed vive en el .env de BIGER_EstrellaRoja_Main. Antes había que exportar
+ * E2E_NATS_NKEY_SEED a mano — la trampa clásica de este flujo — así que ahora
+ * se lee directo de ese .env cuando la variable no está.
+ */
+function nkeySeed(): string | undefined {
+  if (process.env.E2E_NATS_NKEY_SEED) return process.env.E2E_NATS_NKEY_SEED;
+  try {
+    const envMain = path.resolve(process.cwd(), '../BIGER_EstrellaRoja_Main/.env');
+    const contenido = fs.readFileSync(envMain, 'utf-8');
+    const linea = /^(?:TOMTOM|BCB)_SECRET_NATS_SEED=(.+)$/m.exec(contenido);
+    return linea?.[1]?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export type StreamState = { name: string; messages: number; subjects: string[] };
 
@@ -77,8 +97,8 @@ export async function readDlq(streamName: string, max = 20): Promise<DlqEntry[]>
       maxReconnectAttempts: 1,
       // NATS local exige NKEY (ver docker/nats/accounts.conf). Sin seed no hay
       // lectura posible, y hay que decirlo, no devolver vacío.
-      ...(process.env.E2E_NATS_NKEY_SEED
-        ? { authenticator: nkeyAuthenticator(new TextEncoder().encode(process.env.E2E_NATS_NKEY_SEED)) }
+      ...(nkeySeed()
+        ? { authenticator: nkeyAuthenticator(new TextEncoder().encode(nkeySeed())) }
         : {}),
     });
     const js = await nc.jetstreamManager();
@@ -130,10 +150,47 @@ export async function readDlq(streamName: string, max = 20): Promise<DlqEntry[]>
 export async function publishRaw(subject: string, data: unknown, msgId?: string): Promise<boolean> {
   let nc: NatsConnection | undefined;
   try {
-    nc = await connect({ servers: SERVERS, timeout: 3000, maxReconnectAttempts: 1 });
+    nc = await connect({
+      servers: SERVERS,
+      timeout: 3000,
+      maxReconnectAttempts: 1,
+      ...(nkeySeed()
+        ? { authenticator: nkeyAuthenticator(new TextEncoder().encode(nkeySeed()!)) }
+        : {}),
+    });
     const h = natsHeaders();
     if (msgId) h.set('Nats-Msg-Id', msgId);
-    await nc.jetstream().publish(subject, Buffer.from(JSON.stringify(data)), { headers: h });
+    const payload = Buffer.from(JSON.stringify(data));
+    if (msgId) {
+      // Con msgId hay dedup: el subject vive en un stream, publish con ack.
+      await nc.jetstream().publish(subject, payload, { headers: h });
+    } else {
+      // Subject core (request/reply de los adapters): publish plano. jetstream()
+      // .publish acá falla con UNKNOWN_ERROR porque ningún stream lo captura.
+      nc.publish(subject, payload, { headers: h });
+      await nc.flush();
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await nc?.drain().catch(() => undefined);
+  }
+}
+
+/** Purga un stream (p.ej. la DLQ antes de una corrida, para una línea base limpia). */
+export async function purgeStream(streamName: string): Promise<boolean> {
+  let nc: NatsConnection | undefined;
+  try {
+    nc = await connect({
+      servers: SERVERS,
+      timeout: 3000,
+      ...(nkeySeed()
+        ? { authenticator: nkeyAuthenticator(new TextEncoder().encode(nkeySeed()!)) }
+        : {}),
+    });
+    const jsm = await nc.jetstreamManager();
+    await jsm.streams.purge(streamName);
     return true;
   } catch {
     return false;

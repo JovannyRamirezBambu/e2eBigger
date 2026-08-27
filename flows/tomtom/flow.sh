@@ -272,7 +272,6 @@ PY
     dim "   satélite TomTom ya corriendo"
   else
     stop_bg satelite-tomtom
-  stop_bg fake-inroute
     ensure_port_free "$PORT_SAT" "satélite TomTom"
     ( cd "$REPO_SAT" && \
       start_bg satelite-tomtom "$LOG_DIR/satelite-tomtom.log" \

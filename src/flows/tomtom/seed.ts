@@ -29,6 +29,9 @@ async function wipe(): Promise<void> {
 
   // Orden inverso a las FKs. Bus antes que Operator: Bus.operatorId → Operator.
   await db.travelCardStatusLog.deleteMany({ where: { travelCardId: { in: cardIds } } });
+  // Hijas del corte de depuración (telemetría T12 y bitácora de sync con InRoute)
+  await db.tomTomTripData.deleteMany({ where: { travelCardId: { in: cardIds } } });
+  await db.travelCardTomTomSync.deleteMany({ where: { travelCardId: { in: cardIds } } });
   await db.travelCard.deleteMany({ where: { id: { in: cardIds } } });
   await db.tripDispatch.deleteMany({ where: { tripId: { in: tripIds } } });
   await db.trip.deleteMany({ where: { id: { in: tripIds } } });
@@ -189,6 +192,13 @@ async function seedScenario(s: Scenario): Promise<void> {
 export async function seed(): Promise<void> {
   await wipe();
   await seedCatalog();
+  // Línea base limpia: los venenos de corridas anteriores (trips borrados por el
+  // cleanup) no deben contar contra el caso dlq-vacia de ESTA corrida.
+  const { purgeStream } = await import('@harness/nats');
+  if (await purgeStream('TOMTOM_GEOCERCAS_DLQ_STREAM')) {
+    console.log('DLQ purgada (línea base limpia)');
+  }
+
   for (const s of allScenarios) {
     await seedScenario(s);
     console.log(`  ${String(s.n).padEnd(3)} trip=${s.tripId} card=${s.cardId}`);
@@ -221,6 +231,9 @@ export async function createChainTrip(s: Scenario): Promise<{ tripId: string; ca
     const cardIds = previos.map((c) => c.id);
     const tripIds = previos.map((c) => c.tripId);
     await db.travelCardStatusLog.deleteMany({ where: { travelCardId: { in: cardIds } } });
+    // Hijas nuevas del corte de depuración: telemetría T12 y bitácora de sync.
+    await db.tomTomTripData.deleteMany({ where: { travelCardId: { in: cardIds } } });
+    await db.travelCardTomTomSync.deleteMany({ where: { travelCardId: { in: cardIds } } });
     await db.travelCard.deleteMany({ where: { id: { in: cardIds } } });
     await db.tripDispatch.deleteMany({ where: { tripId: { in: tripIds } } });
     await db.trip.deleteMany({ where: { id: { in: tripIds } } });
