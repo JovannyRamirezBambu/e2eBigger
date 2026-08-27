@@ -24,10 +24,17 @@ NATS_MONITOR="http://localhost:8222"
 PORT_ADAPTER_BCB=8085
 PORT_ADAPTER_TOMTOM=8090   # 8088 lo reserva adapter-ventaabordo (ver docker-compose)
 PORT_BCB_APP=3009
+PORT_SAT=3003              # satélite TomTom (3001 es Venta a Bordo, 3002 portalagencias)
+
+# InRoute falso (contrato REAL verificado contra el sandbox de Adsum). Lo levanta
+# este flujo en modo standalone — las cadenas CU01/T12 lo necesitan; el panel
+# (./e2e demo tomtom) usa su propia instancia en el mismo puerto.
+PORT_FAKE_INROUTE=7803
 
 # Legs de autenticación: cada uno es un par RSA independiente, como en AWS.
-LEG_SAT="tomtom-sat"    # satélite TomTom → adapter-tomtom
-LEG_BCB="adapter-bcb"   # adapter-bcb    → satélite BCB
+LEG_SAT="tomtom-sat"      # satélite TomTom → adapter-tomtom (callbacks CU04/CU05)
+LEG_ADAPTER="adapter-tt"  # adapter-tomtom → satélite TomTom (viaje.crear/actualizar/cancelar)
+LEG_BCB="adapter-bcb"     # adapter-bcb    → satélite BCB
 
 # ── Helpers de infraestructura ──────────────────────────────────────────────
 # Los helpers de prueba (HTTP firmado, asertos, escenarios, esperas) se fueron a
@@ -49,6 +56,7 @@ flow_up() {
 
   step "Llaves de prueba"
   ensure_keypair "$LEG_SAT"
+  ensure_keypair "$LEG_ADAPTER"
   ensure_keypair "$LEG_BCB"
   dim "   run/keys/ — solo para local, nunca credenciales reales"
 
@@ -123,23 +131,33 @@ print('ok' if 'TOMTOM_GEOCERCAS_STREAM' in names else 'missing')")
   # para resolver las vars del servicio db y aborta si tiene líneas inválidas.
   step "Configuración del satélite (.env)"
   # El satélite valida estas vars de forma eager al bootear TomtomModule, aunque
-  # CU04/CU05 no toquen InRoute. Placeholders para que no truene el arranque.
+  # CU04/CU05 no toquen InRoute.
   [ -f "$REPO_SAT/.env" ] || cp "$REPO_SAT/.env.example" "$REPO_SAT/.env"
-  local sat_priv sat_pub
+  local sat_priv adapter_pub
   sat_priv=$(pem_escaped "$(key_path "$LEG_SAT-private.pem")")
-  sat_pub=$(pem_escaped "$(key_path "$LEG_SAT-public.pem")")
-  python3 - "$REPO_SAT/.env" "$sat_priv" "$sat_pub" "$PORT_ADAPTER_TOMTOM" "$SAT_DB_URL" <<'PY'
+  # JWT_PUBLIC_KEY es la llave con la que el satélite valida lo que le ENTRA, y lo
+  # que le entra lo firma adapter-tomtom: va la pública de ese leg, no la suya.
+  adapter_pub=$(pem_escaped "$(key_path "$LEG_ADAPTER-public.pem")")
+  python3 - "$REPO_SAT/.env" "$sat_priv" "$adapter_pub" "$PORT_ADAPTER_TOMTOM" "$SAT_DB_URL" \
+           "$PORT_SAT" "$PORT_FAKE_INROUTE" <<'PY'
 import sys, re
-path, priv, pub, adapter_port, dburl = sys.argv[1:6]
+path, priv, pub, adapter_port, dburl, sat_port, inroute_port = sys.argv[1:8]
 vals = {
     'DATABASE_URL': f'"{dburl}"',
+    'PORT': sat_port,
     'BIGER_ADAPTER_TOMTOM_URL': f'http://localhost:{adapter_port}',
     'TOMTOM_CALLBACK_PRIVATE_KEY': f'"{priv}"',
     'TOMTOM_CALLBACK_JWT_ISSUER': 'biger-tomtom-satellite',
     'JWT_PUBLIC_KEY': f'"{pub}"',
-    'INROUTE_BASE_URL': 'http://localhost:9/e2e-no-usado',
-    'INROUTE_USERNAME': 'e2e',
-    'INROUTE_PASSWORD': 'e2e',
+    # InRoute falso del panel de demostración (./e2e demo tomtom). Las pruebas de
+    # CU04/CU05 no lo tocan; el panel sí, y ahí es donde el ciclo completo se ve.
+    # InRoute falso con el contrato REAL (lo levanta este mismo flujo). Las
+    # credenciales Basic NO se tocan: si el usuario tiene las del sandbox en su
+    # .env, se conservan — el simulador ignora la autenticación.
+    'INROUTE_BASE_URL': f'http://127.0.0.1:{inroute_port}',
+    # CU03: el simulador y las pruebas empujan eventos al webhook con este token.
+    'INROUTE_WEBHOOK_TOKEN': 'e2e-webhook-token',
+    'SCHEDULER_ENABLED': 'false',
 }
 seen = set()
 out = []
@@ -196,14 +214,21 @@ PY
   nats_seed_tt=$(grep -m1 '^TOMTOM_SECRET_NATS_SEED=' "$REPO_MAIN/.env" | cut -d= -f2)
   [ -n "$nats_seed_bcb" ] && [ -n "$nats_seed_tt" ] || die "faltan las seeds NKEY en $REPO_MAIN/.env"
 
-  # adapter-tomtom — recibe los callbacks del satélite y publica a JetStream.
-  # JWT_BYPASS=false a propósito: queremos ejercer la verificación real de la
-  # firma que hace el satélite (es el código más nuevo del PR del satélite).
+  # adapter-tomtom — dos direcciones en el mismo proceso:
+  #   entrante  ← callbacks del satélite (CU04/CU05). JWT_BYPASS=false a propósito:
+  #     así se ejerce la verificación real de la firma del satélite (leg tomtom-sat).
+  #   saliente  → llamadas al satélite al consumir biger.tomtom.viaje.* Firma con la
+  #     privada del leg adapter-tt, cuya pública quedó en el .env del satélite.
+  #     Sin esto el adaptador llama sin `Authorization` y el satélite responde 401:
+  #     el mismo agujero que tuvo adapter-ventaabordo y que solo se ve en este log.
   if is_running adapter-tomtom; then
     dim "   adapter-tomtom ya corriendo"
   else
     stop_bg adapter-tomtom
     ensure_port_free "$PORT_ADAPTER_TOMTOM" adapter-tomtom
+    local tt_priv_json
+    tt_priv_json=$(python3 -c 'import json,sys; print(json.dumps({"privateKey": open(sys.argv[1]).read()}))' \
+      "$(key_path "$LEG_ADAPTER-private-pkcs8.pem")")
     ( cd "$REPO_MAIN" && \
       SPRING_PROFILES_ACTIVE=local SERVER_PORT="$PORT_ADAPTER_TOMTOM" NATS_URL="$NATS_URL" \
       SECRETS_SOURCE=local DB_SECRET=db-local \
@@ -211,6 +236,10 @@ PY
       NATS_NKEY_SECRET=nats-nkey-tomtom NATS_NKEY_SECRET_KEY_VALUE="{\"seed\":\"$nats_seed_tt\"}" \
       SPRING_DATASOURCE_URL="$BIGER_DB_URL" \
       JWT_BYPASS=false JWT_PUBLIC_KEY="$(pem_escaped "$(key_path "$LEG_SAT-public.pem")")" \
+      SATELLITE_TOMTOM_URL="http://localhost:$PORT_SAT" \
+      TOMTOM_AUTH_PRIVATE_KEY_SECRET=tomtom-jwt-local \
+      TOMTOM_AUTH_PRIVATE_KEY_SECRET_KEY_VALUE="$tt_priv_json" \
+      TOMTOM_AUTH_SUBJECT=adapter-tomtom \
       OTLP_TRACES_ENABLED=false \
       start_bg adapter-tomtom "$LOG_DIR/adapter-tomtom.log" \
         java -jar "$REPO_MAIN/adapter-tomtom/target/adapter-tomtom-1.0.0-SNAPSHOT.jar" )
@@ -225,11 +254,41 @@ PY
   # compartido (lib/), porque este mismo proceso lo usa ticketcolectoroffline.
   start_bcb_app "$REPO_BCB" "$PORT_BCB_APP" "$BCB_DB_URL" "$LEG_BCB"
 
+  # InRoute falso standalone: el satélite resuelve catálogos y registra orden+viaje
+  # contra él en las cadenas CU01/T12. Contrato real (cDriverNo, nGeoCerca*, 3008,
+  # 3016-como-500, motivosCancelacion caído, DELETE /ordenes 405).
+  if is_running fake-inroute; then
+    dim "   InRoute falso ya corriendo"
+  else
+    stop_bg fake-inroute
+    ensure_port_free "$PORT_FAKE_INROUTE" "InRoute falso"
+    ( cd "$ER_ROOT/e2e" &&       start_bg fake-inroute "$LOG_DIR/fake-inroute.log"         node demo-tomtom/inroute-standalone.cjs )
+  fi
+
+  # Satélite TomTom. Recibe POST /tomtom/viajes del adaptador (CU01), el webhook
+  # de eventos de geocerca (CU03, empujado — el polling ya no existe) y expone el
+  # disparador del sync de telemetría (T12).
+  if is_running satelite-tomtom; then
+    dim "   satélite TomTom ya corriendo"
+  else
+    stop_bg satelite-tomtom
+  stop_bg fake-inroute
+    ensure_port_free "$PORT_SAT" "satélite TomTom"
+    ( cd "$REPO_SAT" && \
+      start_bg satelite-tomtom "$LOG_DIR/satelite-tomtom.log" \
+        npx nest start )
+  fi
+
   step "Health"
   wait_for "adapter-tomtom :$PORT_ADAPTER_TOMTOM" 90 http_ok "http://localhost:$PORT_ADAPTER_TOMTOM/actuator/health" || return 1
   wait_for "adapter-bcb :$PORT_ADAPTER_BCB"       90 http_ok "http://localhost:$PORT_ADAPTER_BCB/actuator/health" || return 1
   wait_for "app bcb :$PORT_BCB_APP" 90 bash -c \
     "curl -s -o /dev/null -w '%{http_code}' http://localhost:$PORT_BCB_APP/corridas/x/despachar -X POST | grep -qE '401|400'" || return 1
+  wait_for "InRoute falso :$PORT_FAKE_INROUTE" 30 http_ok "http://localhost:$PORT_FAKE_INROUTE/__e2e/estado" || return 1
+  wait_for "satélite TomTom :$PORT_SAT" 150 http_ok "http://localhost:$PORT_SAT/tomtom/health" || return 1
+  # …y que el guard siga cerrando lo autenticado (la llave pública cargó bien).
+  wait_for "satélite TomTom guard JWT" 30 bash -c \
+    "curl -s -o /dev/null -w '%{http_code}' http://localhost:$PORT_SAT/tomtom/viajes | grep -q 401" || return 1
 
   if ! grep -q "TOMTOM_GEOCERCAS_STREAM" "$LOG_DIR/adapter-bcb.log" 2>/dev/null; then
     warn "adapter-bcb no reporta el consumer de geocercas — revisá $LOG_DIR/adapter-bcb.log"
@@ -238,6 +297,7 @@ PY
   fi
 
   printf '\n'; ok "stack arriba"
+  dim "   InRoute falso standalone arriba en :$PORT_FAKE_INROUTE — el panel (./e2e demo tomtom) usa el suyo"
 }
 
 # ── seed / test / verify / probe ────────────────────────────────────────────
@@ -254,10 +314,14 @@ flow_down() {
   stop_bg bcb-app
   stop_bg adapter-bcb
   stop_bg adapter-tomtom
+  stop_bg satelite-tomtom
+  stop_bg fake-inroute
   # …y los huérfanos que el pid registrado no cubre (wrappers tipo `pnpm exec`).
   kill_port "$PORT_BCB_APP"
   kill_port "$PORT_ADAPTER_BCB"
   kill_port "$PORT_ADAPTER_TOMTOM"
+  kill_port "$PORT_SAT"
+  kill_port "$PORT_FAKE_INROUTE"
   ungraft_all
   ok "scripts temporales removidos de los repos"
 
@@ -286,6 +350,8 @@ flow_status() {
   chk "adapter-tomtom (:$PORT_ADAPTER_TOMTOM)" http_ok "http://localhost:$PORT_ADAPTER_TOMTOM/actuator/health"
   chk "adapter-bcb (:$PORT_ADAPTER_BCB)"       http_ok "http://localhost:$PORT_ADAPTER_BCB/actuator/health"
   chk "app bcb (:$PORT_BCB_APP)"      port_busy "$PORT_BCB_APP"
+  chk "satélite TomTom (:$PORT_SAT)"  port_busy "$PORT_SAT"
+  chk "InRoute falso (:$PORT_FAKE_INROUTE)" http_ok "http://localhost:$PORT_FAKE_INROUTE/__e2e/estado"
 
   printf '\n'
   local n; n=$(bcb_sql "SELECT count(*) FROM \"Trip\" WHERE id LIKE 'e2e%';" 2>/dev/null)

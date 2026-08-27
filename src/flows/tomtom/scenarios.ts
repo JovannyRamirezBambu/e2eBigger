@@ -55,6 +55,10 @@ export const scenarios = {
     'reservado para el recorrido de cadena completa de CU05'),
   VALIDACIONES: scenario(7, TripStatus.DISPATCHED, TravelCardStatus.OPEN,
     'datos que no cuadran (bus/estación equivocados) y happy path de T11 directo'),
+  CADENA_CU01: scenario(8, TripStatus.DISPATCHED, TravelCardStatus.OPEN,
+    'reservado para la cadena completa: CU01 (alta en InRoute) → webhook CU03 → CU04 → T12'),
+  CADENA_NATS: scenario(9, TripStatus.DISPATCHED, TravelCardStatus.OPEN,
+    'reservado para el alta vía NATS (adapter-tomtom) y la bitácora de sync en BCB'),
 } as const;
 
 export const allScenarios = Object.values(scenarios);
