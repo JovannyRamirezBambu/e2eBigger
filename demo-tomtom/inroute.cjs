@@ -256,6 +256,25 @@ class InrouteFalso {
   }
 
   /**
+   * Registra el cruce REAL de geocercas en el viaje, como lo hace el motor del
+   * InRoute real: puebla cFecha/cHora{Salida,Llegada}Real y deja el estatus como
+   * está. Es lo que la reconciliación por poll del satélite viene a leer.
+   */
+  registrarCruceReal(nViaje, salida, llegada) {
+    const viaje = this.estado.viajes.find((v) => v.nViaje === Number(nViaje));
+    if (!viaje) return null;
+    if (salida) {
+      viaje.cFechaSalidaReal = fechaInroute(salida);
+      viaje.cHoraSalidaReal = horaInroute(salida);
+    }
+    if (llegada) {
+      viaje.cFechaLlegadaReal = fechaInroute(llegada);
+      viaje.cHoraLlegadaReal = horaInroute(llegada);
+    }
+    return viaje;
+  }
+
+  /**
    * Marca un viaje como terminado (nStatusViaje = 6) y le carga la telemetría.
    * Es la condición que el proceso programado del satélite espera para descargar
    * los datos del recorrido.

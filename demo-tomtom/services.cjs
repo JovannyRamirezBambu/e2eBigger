@@ -393,10 +393,107 @@ WHERE tc.id = '{{claveERP}}'`,
   ],
 };
 
+
+// ── 5 · Reconciliación por poll (el mecanismo activo de CU04/CU05) ─────────
+const reconciliacion = {
+  id: 'reconciliacion',
+  numero: 5,
+  nombre: 'Reconciliación por poll',
+  alias: 'Poll',
+  metodo: 'POST',
+  ruta: '/tomtom/viajes/reconciliar',
+  auth: 'JWT RS256 (firmado por adapter-tomtom)',
+  quienLlama: 'El scheduler del satélite, cada 2 minutos; este botón dispara el mismo job a mano',
+  direccion: 'BIGER → InRoute → BCB',
+  resumen:
+    'El satélite consulta InRoute, encuentra los cruces de geocerca que InRoute ya registró por su cuenta, y despacha/confirma en BCB — sin depender del webhook.',
+
+  explicacion: [
+    'Los servicios 3 y 4 muestran el camino **webhook**: TomTom nos empuja cada cruce. Ese registro con Adsum sigue pendiente, así que hoy el webhook está **dormido** — y este es el mecanismo que de verdad corre en producción.',
+    'La clave: InRoute registra los cruces **por su cuenta** y los deja escritos en el viaje (`cFechaSalidaReal`, `cFechaLlegadaReal`). El satélite no necesita que nadie le avise: cada 2 minutos consulta los viajes de las corridas vigentes en **una sola llamada** y deriva los mismos dos eventos que dispararía el webhook.',
+    'La hora que se registra en BCB es la que InRoute capturó **en el momento del cruce**, no la hora del poll: el intervalo solo determina cuánto tarda BCB en enterarse (~2 min), nunca la precisión del dato.',
+  ],
+
+  reglas: [
+    'Corre bajo el scheduler del satélite (`SCHEDULER_ENABLED=true`, intervalo `RECONCILIACION_INTERVAL_MINUTES`, default **2 min**); el candado en Postgres garantiza que solo una réplica ejecute cada disparo.',
+    'InRoute tarda ~5 s por consulta (medido en sandbox): todo el lote viaja en **una llamada** con las claves en trozos de 40 (`clavesERP` repetido = unión, verificado contra el sandbox real).',
+    'Aplica la **misma ventana de despacho** que el webhook: salida real entre −45 y +60 min de la programada; fuera de eso se descarta con aviso en el log.',
+    'Convive con el webhook sin duplicar: ambos comparten las marcas `dispatchedAt`/`arrivedAt` (el primero que llega gana), y si el aviso a BCB falla, la marca se **revierte** para que el siguiente ciclo reintente.',
+    'BCB sigue siendo la autoridad: una corrida nunca despachada por operación (OPEN) o cancelada se rechaza con 409, y el 409 se acepta como "ya aplicado" — nunca envenena la cola.',
+  ],
+
+  actores: [A('satelite'), A('inroute'), A('adapterTt'), A('jetstream'), A('adapterBcb'), A('appBcb'), A('bdBcb')],
+  pasos: [
+    { de: 'satelite', a: 'inroute', texto: 'El poll consulta las corridas vigentes', detalle: 'GET /viajes · clavesERP en trozos de 40 · cada 2 min' },
+    { de: 'inroute', a: 'satelite', texto: 'InRoute devuelve los cruces que él mismo registró', detalle: 'cFechaSalidaReal / cFechaLlegadaReal ("" = aún sin cruce)' },
+    { de: 'satelite', a: 'adapter-tomtom', texto: 'Deriva el despacho y/o la llegada', detalle: 'los mismos callbacks CU04/CU05 que dispararía el webhook' },
+    { de: 'adapter-tomtom', a: 'jetstream', texto: 'Se encola durable', detalle: 'TOMTOM_GEOCERCAS_STREAM · dedup por Msg-Id' },
+    { de: 'jetstream', a: 'adapter-bcb', texto: 'Lo toma el adaptador de BCB', detalle: 'Consumidor durable tomtom-geocercas-workers' },
+    { de: 'adapter-bcb', a: 'app-bcb', texto: 'Despacha y confirma en BCB', detalle: 'con la hora real que registró InRoute' },
+    { de: 'app-bcb', a: 'bd-bcb', texto: 'Quedan las horas reales', detalle: 'Trip.realDepartureAt y realArrivalAt' },
+  ],
+
+  campos: [
+    { name: 'claveERP', label: 'Tarjeta de viaje (BCB)', tipo: 'text', doc: 'la corrida a reconciliar' },
+    {
+      name: 'desfaseSalida',
+      label: 'Salida real respecto a la programada (min)',
+      tipo: 'number',
+      doc: 'negativo = se adelantó · dentro de −45 y +60 se acepta',
+    },
+    {
+      name: 'desfaseLlegada',
+      label: 'Llegada real respecto a la programada (min)',
+      tipo: 'number',
+      doc: 'vacío = todavía no llega (solo se despacha)',
+    },
+  ],
+
+  entradas: [
+    {
+      id: 'poll',
+      label: 'Disparar el poll',
+      ayuda: 'POST /tomtom/viajes/reconciliar — el mismo job que el scheduler corre cada 2 minutos.',
+    },
+  ],
+
+  sql: [
+    {
+      id: 'corrida',
+      titulo: 'La corrida quedó despachada y confirmada en BCB',
+      base: 'bcb',
+      descripcion:
+        'La validación que importa: las horas reales son las que InRoute registró en el cruce, no la hora del poll.',
+      query: `SELECT t.status              AS "estado de la corrida",
+       t."departure"         AS "salida programada",
+       t."realDepartureAt"   AS "salida real (InRoute)",
+       t."realArrivalAt"     AS "llegada real (InRoute)",
+       tc.status             AS "estado de la tarjeta"
+FROM "TravelCard" tc
+JOIN "Trip" t ON t.id = tc."tripId"
+WHERE tc.id = '{{claveERP}}'`,
+    },
+    {
+      id: 'marca',
+      titulo: 'Las marcas del satélite (guarda de carrera con el webhook)',
+      base: 'satelite',
+      descripcion:
+        'dispatchedAt/arrivedAt se escriben antes de avisar y se comparten con el camino webhook: el primero que llega gana, el otro no duplica.',
+      query: `SELECT "travelCardId" AS "tarjeta",
+       "dispatchedAt"  AS "salida detectada",
+       "arrivedAt"     AS "llegada detectada",
+       "nTripId"       AS "id en InRoute"
+FROM "TomTomTrip"
+WHERE "travelCardId" = '{{claveERP}}'`,
+    },
+  ],
+};
+
+
 // ── 5 · Catálogos de InRoute ───────────────────────────────────────────────
 const catalogos = {
   id: 'catalogos',
-  numero: 5,
+  numero: 6,
   nombre: 'Catálogos de InRoute',
   alias: 'Consultas',
   metodo: 'GET',
@@ -455,7 +552,7 @@ ORDER BY "createdAt" DESC`,
 // ── 6 · Telemetría del viaje terminado ─────────────────────────────────────
 const telemetria = {
   id: 'telemetria',
-  numero: 6,
+  numero: 7,
   nombre: 'Telemetría del viaje',
   alias: 'Cierre',
   metodo: 'Proceso programado',
@@ -522,6 +619,6 @@ WHERE t."travelCardId" = '{{claveERP}}'`,
   ],
 };
 
-const SERVICIOS = [alta, cambios, cu04, cu05, catalogos, telemetria];
+const SERVICIOS = [alta, cambios, cu04, cu05, reconciliacion, catalogos, telemetria];
 
 module.exports = { SERVICIOS, ACTORES };

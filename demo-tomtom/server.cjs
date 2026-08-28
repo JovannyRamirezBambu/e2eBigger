@@ -430,6 +430,7 @@ function payloadPorDefecto(servicioId, e) {
   // dentro de la ventana de despacho.
   if (servicioId === 'cu04') return { claveERP: base.claveERP, desfaseMinutos: 5 };
   if (servicioId === 'cu05') return { claveERP: base.claveERP, desfaseMinutos: 18 };
+  if (servicioId === 'reconciliacion') return { claveERP: base.claveERP, desfaseSalida: 5, desfaseLlegada: 18 };
   if (servicioId === 'telemetria') {
     return {
       claveERP: base.claveERP,
@@ -803,7 +804,125 @@ async function ejecutarGeocerca(servicioId, payload, opciones) {
   return { pasos, valores: payload };
 }
 
-/** 5 · Catálogos: el satélite pregunta a InRoute y reenvía, sin guardar nada. */
+/**
+ * 5 · Reconciliación por poll: InRoute ya registró los cruces por su cuenta;
+ * el satélite los descubre consultando y deriva despacho/llegada hacia BCB.
+ * Es el mecanismo ACTIVO en producción (el webhook está dormido).
+ */
+async function ejecutarReconciliacion(payload) {
+  const pasos = [];
+  const ids = asegurarRegistroInroute();
+  if (!escenario || !ids) {
+    return {
+      pasos: [{ titulo: 'No hay corrida cargada', error: true, nota: 'Generá una corrida nueva antes de disparar el poll.' }],
+      valores: payload,
+    };
+  }
+
+  // El viaje InRoute de esta corrida (el satélite guarda el nTripId al darla de alta).
+  const fila = await correrSql(
+    'satelite',
+    `SELECT "nTripId" AS n, "tripId" AS corrida FROM "TomTomTrip" WHERE "travelCardId" = '${payload.claveERP}'`,
+  ).catch(() => []);
+  if (!fila.length || !fila[0].n) {
+    return {
+      pasos: [
+        {
+          titulo: 'La corrida no tiene viaje en InRoute',
+          error: true,
+          nota: 'El poll solo mira corridas con nTripId asignado. Corré primero el servicio 1 (alta) para esta tarjeta.',
+        },
+      ],
+      valores: payload,
+    };
+  }
+  const nViaje = fila[0].n;
+
+  // 1) InRoute registra los cruces él solo — esto en producción lo hace su motor
+  //    de geocercas con el GPS de la unidad; acá lo simula el panel.
+  const salidaReal = new Date(new Date(escenario.departure).getTime() + Number(payload.desfaseSalida || 0) * 60_000);
+  const conLlegada = payload.desfaseLlegada !== '' && payload.desfaseLlegada !== null && payload.desfaseLlegada !== undefined;
+  const llegadaReal = conLlegada
+    ? new Date(new Date(escenario.departure).getTime() + Number(payload.desfaseLlegada) * 60_000)
+    : null;
+  const viaje = inroute.registrarCruceReal(nViaje, salidaReal, llegadaReal);
+  pasos.push({
+    titulo: 'InRoute registró los cruces por su cuenta (nadie nos avisó)',
+    nota:
+      'El motor de geocercas de InRoute escribe las horas reales en el viaje. El satélite todavía no sabe nada — eso es exactamente lo que el poll viene a descubrir.',
+    datos: viaje && {
+      nViaje,
+      cFechaSalidaReal: viaje.cFechaSalidaReal,
+      cHoraSalidaReal: viaje.cHoraSalidaReal,
+      cFechaLlegadaReal: viaje.cFechaLlegadaReal || '(aún sin llegada)',
+      cHoraLlegadaReal: viaje.cHoraLlegadaReal || '',
+    },
+  });
+
+  // 2) El poll — el mismo job que el scheduler corre cada 2 minutos.
+  pasos.push({
+    titulo: 'El satélite dispara el poll de reconciliación',
+    nota:
+      'POST /tomtom/viajes/reconciliar (en producción lo agenda el scheduler cada 2 min con candado en Postgres). ' +
+      'UNA consulta a InRoute con todas las claves vigentes; deriva despacho y llegada de las horas reales.',
+    http: await llamar('POST', `${config.satelite}/tomtom/viajes/reconciliar`, {
+      headers: authSatelite(),
+      body: {},
+      timeoutMs: 60000,
+    }),
+  });
+
+  // 3) Las marcas del satélite (compartidas con el camino webhook).
+  const marca = await esperarFila(
+    'satelite',
+    `SELECT "dispatchedAt" AS "salida detectada", "arrivedAt" AS "llegada detectada"
+     FROM "TomTomTrip" WHERE "travelCardId" = '${payload.claveERP}'`,
+    25000,
+    (f) => f['salida detectada'] !== null && (!conLlegada || f['llegada detectada'] !== null),
+  );
+  pasos.push(
+    marca && marca['salida detectada']
+      ? {
+          titulo: 'El poll derivó los eventos y marcó el viaje',
+          nota: 'Las marcas dispatchedAt/arrivedAt son las MISMAS que usa el webhook: por eso los dos caminos pueden convivir sin duplicar avisos.',
+          datos: marca,
+        }
+      : {
+          titulo: 'El poll no derivó la salida',
+          error: true,
+          nota: 'O la salida real quedó fuera de la ventana −45/+60 min de la programada, o la corrida ya estaba despachada, o el callback falló (la marca se revierte para reintentar).',
+          diagnostico: await diagnosticar('satelite'),
+        },
+  );
+
+  // 4) Y la validación que importa: BCB.
+  const enBcb = await esperarFila(
+    'bcb',
+    `SELECT t.status AS "estado de la corrida", t."realDepartureAt" AS "salida real (InRoute)",
+            t."realArrivalAt" AS "llegada real (InRoute)", tc.status AS "estado de la tarjeta"
+     FROM "TravelCard" tc JOIN "Trip" t ON t.id = tc."tripId" WHERE tc.id = '${payload.claveERP}'`,
+    30000,
+    (f) => f['salida real (InRoute)'] !== null && (!conLlegada || f['llegada real (InRoute)'] !== null),
+  );
+  pasos.push(
+    enBcb && enBcb['salida real (InRoute)']
+      ? {
+          titulo: conLlegada ? 'BCB despachó y confirmó con las horas reales de InRoute' : 'BCB despachó la corrida con su hora real',
+          nota: 'La hora registrada es la del cruce (la capturó InRoute), no la del poll: el intervalo solo es latencia, nunca imprecisión.',
+          datos: enBcb,
+        }
+      : {
+          titulo: 'El evento no terminó de asentarse en BCB',
+          error: true,
+          nota: 'El satélite lo derivó pero no llegó al otro lado de la cola.',
+          diagnostico: await diagnosticar('cola'),
+        },
+  );
+
+  return { pasos, valores: payload };
+}
+
+/** 6 · Catálogos: el satélite pregunta a InRoute y reenvía, sin guardar nada. */
 async function ejecutarCatalogos(payload, opciones) {
   const recurso = ['vehiculos', 'conductores', 'grupos', 'geocercas-catalogo'].includes(opciones.entrada)
     ? opciones.entrada
@@ -1154,6 +1273,7 @@ const servidor = http.createServer(async (req, res) => {
       if (servicio === 'alta') salida = await ejecutarAlta(payload, opciones);
       else if (servicio === 'cambios') salida = await ejecutarCambios(payload, opciones);
       else if (servicio === 'cu04' || servicio === 'cu05') salida = await ejecutarGeocerca(servicio, payload, opciones);
+      else if (servicio === 'reconciliacion') salida = await ejecutarReconciliacion(payload);
       else if (servicio === 'catalogos') salida = await ejecutarCatalogos(payload, opciones);
       else if (servicio === 'telemetria') salida = await ejecutarTelemetria(payload);
       else return json(res, 400, { error: `servicio desconocido: ${servicio}` });
