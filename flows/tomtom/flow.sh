@@ -139,9 +139,9 @@ print('ok' if 'TOMTOM_GEOCERCAS_STREAM' in names else 'missing')")
   # que le entra lo firma adapter-tomtom: va la pública de ese leg, no la suya.
   adapter_pub=$(pem_escaped "$(key_path "$LEG_ADAPTER-public.pem")")
   python3 - "$REPO_SAT/.env" "$sat_priv" "$adapter_pub" "$PORT_ADAPTER_TOMTOM" "$SAT_DB_URL" \
-           "$PORT_SAT" "$PORT_FAKE_INROUTE" <<'PY'
+           "$PORT_SAT" "$PORT_FAKE_INROUTE" "${E2E_INROUTE:-fake}" <<'PY'
 import sys, re
-path, priv, pub, adapter_port, dburl, sat_port, inroute_port = sys.argv[1:8]
+path, priv, pub, adapter_port, dburl, sat_port, inroute_port, inroute_mode = sys.argv[1:9]
 vals = {
     'DATABASE_URL': f'"{dburl}"',
     'PORT': sat_port,
@@ -154,7 +154,11 @@ vals = {
     # InRoute falso con el contrato REAL (lo levanta este mismo flujo). Las
     # credenciales Basic NO se tocan: si el usuario tiene las del sandbox en su
     # .env, se conservan — el simulador ignora la autenticación.
-    'INROUTE_BASE_URL': f'http://127.0.0.1:{inroute_port}',
+    # E2E_INROUTE=real → el satélite habla con el sandbox de Adsum (credenciales
+    # Basic del .env del usuario, que se preservan). Default: el simulador local.
+    'INROUTE_BASE_URL': ('https://sandboxinrouteapi.inroute.com.mx/api'
+                         if inroute_mode == 'real'
+                         else f'http://127.0.0.1:{inroute_port}'),
     # CU03: el simulador y las pruebas empujan eventos al webhook con este token.
     'INROUTE_WEBHOOK_TOKEN': 'e2e-webhook-token',
     'SCHEDULER_ENABLED': 'false',
@@ -257,7 +261,9 @@ PY
   # InRoute falso standalone: el satélite resuelve catálogos y registra orden+viaje
   # contra él en las cadenas CU01/T12. Contrato real (cDriverNo, nGeoCerca*, 3008,
   # 3016-como-500, motivosCancelacion caído, DELETE /ordenes 405).
-  if is_running fake-inroute; then
+  if [ "${E2E_INROUTE:-fake}" = "real" ]; then
+    dim "   E2E_INROUTE=real — sin InRoute falso: el satélite habla con el sandbox de Adsum"
+  elif is_running fake-inroute; then
     dim "   InRoute falso ya corriendo"
   else
     stop_bg fake-inroute
@@ -283,7 +289,7 @@ PY
   wait_for "adapter-bcb :$PORT_ADAPTER_BCB"       90 http_ok "http://localhost:$PORT_ADAPTER_BCB/actuator/health" || return 1
   wait_for "app bcb :$PORT_BCB_APP" 90 bash -c \
     "curl -s -o /dev/null -w '%{http_code}' http://localhost:$PORT_BCB_APP/corridas/x/despachar -X POST | grep -qE '401|400'" || return 1
-  wait_for "InRoute falso :$PORT_FAKE_INROUTE" 30 http_ok "http://localhost:$PORT_FAKE_INROUTE/__e2e/estado" || return 1
+  [ "${E2E_INROUTE:-fake}" = "real" ] || wait_for "InRoute falso :$PORT_FAKE_INROUTE" 30 http_ok "http://localhost:$PORT_FAKE_INROUTE/__e2e/estado" || return 1
   wait_for "satélite TomTom :$PORT_SAT" 150 http_ok "http://localhost:$PORT_SAT/tomtom/health" || return 1
   # …y que el guard siga cerrando lo autenticado (la llave pública cargó bien).
   wait_for "satélite TomTom guard JWT" 30 bash -c \

@@ -29,6 +29,11 @@ export type CaseDef = {
   name: string;
   /** Etiqueta legible para alguien que no conoce el código. */
   label: string;
+  /**
+   * Si devuelve un texto, el caso se omite con ese motivo (p. ej. requiere el
+   * InRoute falso y el flujo corre contra el sandbox real). No cuenta como fallo.
+   */
+  skip?: () => string | null;
   run: (t: Report) => Promise<void>;
 };
 

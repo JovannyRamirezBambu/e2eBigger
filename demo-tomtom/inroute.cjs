@@ -95,7 +95,11 @@ function estadoInicial() {
     // confunda con uno real si alguien compara pantallas con Adsum.
     siguiente: {
       nVehiculo: 700, nConductor: 1800, nGrupo: 100, nInstruccionViaje: 4200,
-      nViaje: 48000, nOrden: 20700,
+      // nViaje/nOrden arrancan con offset temporal: el satélite persiste nTripId
+      // (@unique) y nOrderId, así que un reinicio del simulador NO debe repetir
+      // ids ya usados — reproduciría un P2002 que en el real no existe.
+      nViaje: 100000 + (Math.floor(Date.now() / 1000) % 800000000),
+      nOrden: 100000 + (Math.floor(Date.now() / 1000) % 800000000),
       nInstruccionViajeWayPoint: 9300, nInstruccionViajeDocumento: 1100,
     },
   };
@@ -117,6 +121,22 @@ class InrouteFalso {
   }
 
   /**
+   * Id DETERMINISTA derivado de la clave de negocio (hash FNV-1a → 5 dígitos).
+   * Un reinicio del simulador no debe invalidar el cache de equivalencias del
+   * satélite (TomTomEquivalencia persiste nVehiculo/nConductor/nGrupo): con ids
+   * por contenido, "E2E-BUS-8" vuelve a ser el mismo nVehiculo en cada arranque
+   * — igual que en el InRoute real, donde los ids son estables.
+   */
+  idEstable(texto) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < texto.length; i += 1) {
+      h ^= texto.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return 10000 + (h % 89000);
+  }
+
+  /**
    * Da de alta —o reutiliza— la unidad, el operador, su grupo y la instrucción de
    * viaje de una corrida de BCB. Es el equivalente al `setup-mappings.ts` que en
    * un ambiente real se corre una vez: sin esto el satélite no encuentra a quién
@@ -128,7 +148,7 @@ class InrouteFalso {
     let vehiculo = e.vehiculos.find((v) => (v.cObjectNo || '').trim() === economicNumber);
     if (!vehiculo) {
       vehiculo = {
-        nVehiculo: this.siguienteId('nVehiculo'),
+        nVehiculo: this.idEstable(`vehiculo:${economicNumber}`),
         // El InRoute real rellena cObjectNo con espacios ("966 ") — se simula
         // igual para que el trim del satélite quede ejercido.
         cObjectNo: `${economicNumber} `,
@@ -147,7 +167,7 @@ class InrouteFalso {
     let conductor = e.conductores.find((c) => (c.cDriverNo || '').trim() === operatorKey);
     if (!conductor) {
       conductor = {
-        nConductor: this.siguienteId('nConductor'),
+        nConductor: this.idEstable(`conductor:${operatorKey}`),
         cDriverNo: operatorKey,
         cObjectNo: '',
         cDescripcion: `OPERADOR DEMO ${operatorKey}`,
@@ -159,7 +179,7 @@ class InrouteFalso {
     let grupo = e.grupos.find((g) => g._nVehiculo === vehiculo.nVehiculo && g._nConductor === conductor.nConductor);
     if (!grupo) {
       grupo = {
-        nGrupo: this.siguienteId('nGrupo'),
+        nGrupo: this.idEstable(`grupo:${economicNumber}|${operatorKey}`),
         // Internos (con _): el GET real filtrado devuelve solo nGrupo/cDescripcion.
         _nVehiculo: vehiculo.nVehiculo,
         _nConductor: conductor.nConductor,
@@ -170,7 +190,7 @@ class InrouteFalso {
 
     let instruccion = e.instrucciones.find((i) => i.cClaveERP === routeNumber);
     if (!instruccion) {
-      const n = this.siguienteId('nInstruccionViaje');
+      const n = this.idEstable(`instruccion:${routeNumber}`);
       instruccion = {
         nInstruccionViaje: n,
         cClaveERP: routeNumber,

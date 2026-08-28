@@ -59,6 +59,8 @@ export const scenarios = {
     'reservado para la cadena completa: CU01 (alta en InRoute) → webhook CU03 → CU04 → T12'),
   CADENA_NATS: scenario(9, TripStatus.DISPATCHED, TravelCardStatus.OPEN,
     'reservado para el alta vía NATS (adapter-tomtom) y la bitácora de sync en BCB'),
+  CADENA_POLL: scenario(10, TripStatus.DISPATCHED, TravelCardStatus.OPEN,
+    'reservado para la reconciliación por poll: salida/llegada reales derivadas de InRoute sin webhook'),
 } as const;
 
 export const allScenarios = Object.values(scenarios);

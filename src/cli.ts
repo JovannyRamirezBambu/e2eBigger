@@ -100,6 +100,19 @@ async function main(): Promise<number> {
         return 0;
       }
 
+      // La corrida del panel de demostración (./e2e demo tomtom). Vive acá y no en
+      // el panel porque necesita el Prisma de BCB; el panel solo lee el JSON que
+      // imprime por stdout.
+      case 'demo-trip': {
+        if (flowName !== 'tomtom') {
+          console.error(`'${cmd}' solo existe para el flujo tomtom`);
+          return 1;
+        }
+        const { demoTrip } = await import('./flows/tomtom/demo');
+        console.log(JSON.stringify(await demoTrip()));
+        return 0;
+      }
+
       case 'traffic': {
         const file = path.join(RUN_DIR, `${flowName}-http.json`);
         try {
@@ -145,6 +158,11 @@ async function main(): Promise<number> {
         await flow.beforeCases?.();
         report.step('Casos');
         for (const c of selected) {
+          const omitido = c.skip?.();
+          if (omitido) {
+            console.log(`  \u23ED  ${c.name} \u2014 omitido: ${omitido}`);
+            continue;
+          }
           report.beginCase(c.name);
           setCurrentCase(c.name);
           try {

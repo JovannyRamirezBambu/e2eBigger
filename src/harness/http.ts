@@ -114,6 +114,14 @@ export class SatelliteClient {
   post<T = unknown, Body = unknown>(path: string, body: Body, override?: Partial<SignOpts>) {
     return this.request<T>('POST', path, body, override);
   }
+
+  put<T = unknown, Body = unknown>(path: string, body: Body, override?: Partial<SignOpts>) {
+    return this.request<T>('PUT', path, body, override);
+  }
+
+  delete<T = unknown>(path: string, override?: Partial<SignOpts>) {
+    return this.request<T>('DELETE', path, undefined, override);
+  }
 }
 
 /** Health de Spring Boot / cualquier endpoint que solo interese si responde. */

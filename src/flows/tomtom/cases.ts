@@ -16,6 +16,7 @@ import type { Report } from '@harness/report';
 import type { CaseDef } from '@harness/types';
 import { isoUtc, pgTimestamp, untilEquals } from '@harness/wait';
 import * as fs from 'fs';
+import * as path from 'path';
 import { catalog, scenarios } from './scenarios';
 import { confirmarLlegada as satConfirmar, despacharCorrida as satDespachar } from './satellite';
 import { createChainTrip } from './seed';
@@ -51,6 +52,32 @@ const WEBHOOK_TOKEN = process.env.E2E_INROUTE_WEBHOOK_TOKEN ?? 'e2e-webhook-toke
 
 /** Habla con el satélite TomTom como lo hace adapter-tomtom: firmando con su llave. */
 const sat = new SatelliteClient(SAT_URL, { leg: 'adapter-tt', subject: 'adapter-tomtom' });
+
+/**
+ * ¿El satélite está apuntando al sandbox REAL de Adsum? (levantado con
+ * `E2E_INROUTE=real ./e2e up tomtom`). Se lee del .env del satélite — la misma
+ * fuente de verdad que usa el proceso — para que `test` no dependa de repetir
+ * la variable de entorno.
+ */
+function esInrouteReal(): boolean {
+  try {
+    const env = fs.readFileSync(path.resolve(process.cwd(), '../BIGER_EstrellaRoja_TomTom/.env'), 'utf-8');
+    const m = env.match(/^INROUTE_BASE_URL=(.+)$/m);
+    return Boolean(m && !m[1]!.includes('127.0.0.1') && !m[1]!.includes('localhost'));
+  } catch {
+    return false;
+  }
+}
+
+/** "dd/mm/yyyy" + "HH:mm" en CST, como los registra InRoute. */
+function fechaHoraInroute(d: Date): { fecha: string; hora: string } {
+  const p = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Mexico_City', day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(d);
+  const v = (t: string) => p.find((x) => x.type === t)!.value;
+  return { fecha: `${v('day')}/${v('month')}/${v('year')}`, hora: `${v('hour')}:${v('minute')}` };
+}
 
 /** Administración del InRoute falso (rutas __e2e del standalone). */
 async function fakeInroute<T = Record<string, unknown>>(path: string, body?: unknown): Promise<T> {
@@ -352,6 +379,7 @@ export const cases: CaseDef[] = [
   {
     name: 'cadena-cu01-webhook-t12',
     label: 'CADENA · CU01 alta en InRoute → webhook CU03 → CU04 en BCB → T12 telemetría',
+    skip: () => (esInrouteReal() ? 'requiere el InRoute falso (catálogos __e2e y simulación del webhook)' : null),
     async run(t) {
       const s8 = scenarios.CADENA_CU01;
       const { tripId, cardId } = await createChainTrip(s8);
@@ -436,6 +464,7 @@ export const cases: CaseDef[] = [
   {
     name: 'cadena-nats-bitacora',
     label: 'CADENA · alta vía NATS y bitácora de sync en BCB',
+    skip: () => (esInrouteReal() ? 'requiere el InRoute falso (los catálogos E2E-* no existen en el sandbox real)' : null),
     async run(t) {
       const s9 = scenarios.CADENA_NATS;
       const { tripId, cardId } = await createChainTrip(s9);
@@ -478,6 +507,122 @@ export const cases: CaseDef[] = [
       );
       t.is('BITÁCORA: tomTomTripId poblado en la TravelCard', true, conTripId);
       t.is('BITÁCORA: tomTomFailed en false', false, (await card(cardId))?.tomTomFailed);
+    },
+  },
+  {
+    name: 'cadena-reconciliacion',
+    label: 'CADENA · reconciliación por poll: salida/llegada reales derivadas de InRoute, sin webhook',
+    skip: () => (esInrouteReal() ? 'requiere el InRoute falso (rutas __e2e para simular el cruce de geocercas)' : null),
+    async run(t) {
+      const s10 = scenarios.CADENA_POLL;
+      const { tripId, cardId } = await createChainTrip(s10);
+
+      await fakeInroute('/__e2e/corridas', {
+        economicNumber: `E2E-BUS-${s10.n}`, operatorKey: `E2E-OP-${s10.n}`,
+        routeNumber: `E2E-R-${s10.n}`, routeName: 'CADENA POLL',
+      });
+
+      const departure = new Date(Date.now() + 10 * 60_000);
+      const alta = await sat.post<{ nTripId: number | null }>('/tomtom/viajes', {
+        claveERP: cardId,
+        tripId,
+        economicNumber: `E2E-BUS-${s10.n}`,
+        operatorKey: `E2E-OP-${s10.n}`,
+        routeId: `E2E-R-${s10.n}`,
+        operatorName: 'OPERADOR CADENA DIEZ',
+        departure: departure.toISOString(),
+        busId: s10.busId,
+        operatorId: s10.operadorId,
+        destinationId: catalog.destinoId,
+      });
+      t.is('CU01: alta 201', 201, alta.status, alta.text);
+
+      // Sin tiempos reales aún: el poll no debe derivar nada.
+      const enVacio = await sat.post('/tomtom/viajes/reconciliar', {});
+      t.is('poll sin cruces → 202 y sin efectos', 202, enVacio.status, enVacio.text);
+      t.is('poll sin cruces: BCB sigue sin salida real', null, (await trip(tripId))?.realDepartureAt ?? null);
+
+      // InRoute registra el cruce él mismo (salida dentro de la ventana −45/+60
+      // respecto a la salida programada; llegada = ahora).
+      const salida = fechaHoraInroute(new Date());
+      const llegada = fechaHoraInroute(new Date());
+      await fakeInroute('/__e2e/terminar-viaje', {
+        nViaje: alta.body!.nTripId,
+        telemetria: {
+          cFechaSalidaReal: salida.fecha, cHoraSalidaReal: salida.hora,
+          cFechaLlegadaReal: llegada.fecha, cHoraLlegadaReal: llegada.hora,
+        },
+      });
+
+      const conCruces = await sat.post('/tomtom/viajes/reconciliar', {});
+      t.is('poll con cruces → 202', 202, conCruces.status, conCruces.text);
+
+      // El despacho y la llegada viajaron satélite → adapter → JetStream → BCB.
+      const { ok: despachada } = await untilEquals(async () => Boolean((await trip(tripId))?.realDepartureAt), true);
+      t.is('CU04: realDepartureAt en BCB (derivado del poll)', true, despachada, dedupHit(tripId) ? DEDUP_HINT : 'revisá: ./e2e logs tomtom adapter-bcb');
+      const { ok: confirmada } = await untilEquals(async () => (await card(cardId))?.status, TravelCardStatus.CONFIRMED);
+      t.is('CU04: tarjeta CONFIRMED en BCB (derivado del poll)', true, confirmada);
+
+      // Idempotencia: repetir el poll no re-notifica ni cambia la hora registrada.
+      const antes = (await trip(tripId))?.realDepartureAt?.toISOString();
+      const repetido = await sat.post('/tomtom/viajes/reconciliar', {});
+      t.is('poll repetido → 202', 202, repetido.status, repetido.text);
+      t.is('poll repetido: hora real intacta', antes, (await trip(tripId))?.realDepartureAt?.toISOString());
+    },
+  },
+  {
+    name: 'inroute-ciclo-viaje',
+    label: 'InRoute · ciclo completo del viaje vía satélite: alta → consulta → actualiza → cancela (sandbox real con E2E_INROUTE=real)',
+    async run(t) {
+      const real = esInrouteReal();
+      let refs = {
+        economicNumber: process.env.E2E_INROUTE_BUS ?? '675',
+        operatorKey: process.env.E2E_INROUTE_OP ?? '303258',
+        routeId: process.env.E2E_INROUTE_ROUTE ?? '200',
+      };
+      if (!real) {
+        await fakeInroute('/__e2e/corridas', {
+          economicNumber: 'E2E-BUS-SMOKE', operatorKey: 'E2E-OP-SMOKE',
+          routeNumber: 'E2E-R-SMOKE', routeName: 'CICLO VIAJE',
+        });
+        refs = { economicNumber: 'E2E-BUS-SMOKE', operatorKey: 'E2E-OP-SMOKE', routeId: 'E2E-R-SMOKE' };
+      }
+
+      // Clave única ≤20 chars (cObjectNo de la orden InRoute trunca a 20).
+      const clave = `BQAE2E${Date.now()}`;
+      const departure = new Date(Date.now() + 70 * 60_000); // respeta los 60 min del CU01
+
+      const alta = await sat.post<{ nTripId: number | null; nOrderId: number | null }>('/tomtom/viajes', {
+        claveERP: clave,
+        tripId: clave,
+        economicNumber: refs.economicNumber,
+        operatorKey: refs.operatorKey,
+        routeId: refs.routeId,
+        operatorName: 'PRUEBA E2E BAMBU',
+        departure: departure.toISOString(),
+      });
+      t.is(`alta 201 contra InRoute ${real ? 'REAL (sandbox)' : 'falso'}`, 201, alta.status, alta.text);
+      t.is('alta: nTripId asignado', true, (alta.body?.nTripId ?? 0) > 0, alta.text);
+      t.is('alta: nOrderId asignado (regla 3008)', true, (alta.body?.nOrderId ?? 0) > 0, alta.text);
+
+      const consulta = await sat.get<{ nStatusViaje?: number }>(`/tomtom/viajes/${clave}`);
+      t.is('consulta 200', 200, consulta.status, consulta.text);
+      t.is('consulta: viaje Conformado (nStatusViaje 2)', 2, consulta.body?.nStatusViaje, consulta.text);
+
+      // El claveERP va en el path — el UpdateViajeDto lo rechaza en el body.
+      const actualiza = await sat.put(`/tomtom/viajes/${clave}`, {
+        tripId: clave,
+        economicNumber: refs.economicNumber,
+        operatorKey: refs.operatorKey,
+        routeId: refs.routeId,
+        operatorName: 'PRUEBA E2E BAMBU (upd)',
+        departure: new Date(departure.getTime() + 10 * 60_000).toISOString(),
+      });
+      t.is('actualización 200', 200, actualiza.status, actualiza.text);
+
+      // Limpieza siempre: el viaje se cancela en InRoute (motivo fallback 1).
+      const cancela = await sat.delete(`/tomtom/viajes/${clave}`);
+      t.is('cancelación aceptada', true, cancela.status < 300, cancela.text);
     },
   },
   {
