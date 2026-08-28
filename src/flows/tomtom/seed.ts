@@ -7,6 +7,7 @@
  */
 import { BusStatus, BusType, CollectionType, OperatorTripStatus, StationType, TravelCardStatus, TripStatus } from '@bcb/prisma-enums';
 import { bcbDb } from '@harness/db';
+import { execSync } from 'child_process';
 import { randomUUID } from 'crypto';
 import { allScenarios, catalog, type Scenario } from './scenarios';
 
@@ -197,6 +198,21 @@ export async function seed(): Promise<void> {
   const { purgeStream } = await import('@harness/nats');
   if (await purgeStream('TOMTOM_GEOCERCAS_DLQ_STREAM')) {
     console.log('DLQ purgada (línea base limpia)');
+  }
+
+  // La BD del SATÉLITE también se limpia: el wipe borra las TravelCards de BCB,
+  // pero los TomTomTrip huérfanos del satélite siguen ahí y el sync T12 acabaría
+  // empujando telemetría de tarjetas ya inexistentes (404 → veneno en la DLQ que
+  // no es de esta corrida). Las equivalencias SÍ se conservan: el simulador usa
+  // ids deterministas, así que siguen siendo válidas entre corridas y reinicios.
+  try {
+    execSync(
+      `docker exec biger_estrellaroja_tomtom-db-1 psql -U postgres -d biger_tomtom -c 'TRUNCATE "TomTomTrip" CASCADE;'`,
+      { stdio: 'pipe' },
+    );
+    console.log('BD del satélite limpia (TomTomTrip y sus hijas)');
+  } catch {
+    console.warn('aviso: no se pudo limpiar la BD del satélite (¿contenedor abajo?) — el sync T12 puede envenenar la DLQ con corridas viejas');
   }
 
   for (const s of allScenarios) {
