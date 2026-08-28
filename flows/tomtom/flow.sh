@@ -159,8 +159,6 @@ vals = {
     'INROUTE_BASE_URL': ('https://sandboxinrouteapi.inroute.com.mx/api'
                          if inroute_mode == 'real'
                          else f'http://127.0.0.1:{inroute_port}'),
-    # CU03: el simulador y las pruebas empujan eventos al webhook con este token.
-    'INROUTE_WEBHOOK_TOKEN': 'e2e-webhook-token',
     'SCHEDULER_ENABLED': 'false',
 }
 seen = set()
@@ -271,7 +269,7 @@ PY
     ( cd "$ER_ROOT/e2e" &&       start_bg fake-inroute "$LOG_DIR/fake-inroute.log"         node demo-tomtom/inroute-standalone.cjs )
   fi
 
-  # Satélite TomTom. Recibe POST /tomtom/viajes del adaptador (CU01), el webhook
+  # Satélite TomTom. Recibe POST /tomtom/viajes del adaptador (CU01), corre el poll
   # de eventos de geocerca (CU03, empujado — el polling ya no existe) y expone el
   # disparador del sync de telemetría (T12).
   if is_running satelite-tomtom; then

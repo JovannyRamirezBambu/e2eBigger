@@ -28,8 +28,6 @@ const { SERVICIOS } = require('./services.cjs');
 const {
   InrouteFalso,
   crearServidorInroute,
-  GEOCERCA_ORIGEN,
-  GEOCERCA_DESTINO,
 } = require('./inroute.cjs');
 
 const E2E_ROOT = path.resolve(__dirname, '..');
@@ -112,9 +110,6 @@ function tokenAdapter(ttlSegundos = 600) {
 
 const authSatelite = () => ({ Authorization: `Bearer ${tokenAdapter()}` });
 // CU03: el webhook de eventos de geocerca usa token estático parametrizado
-// (INROUTE_WEBHOOK_TOKEN en el .env del satélite), no el JWT del adapter.
-const WEBHOOK_TOKEN = process.env.E2E_INROUTE_WEBHOOK_TOKEN || 'e2e-webhook-token';
-const authWebhook = () => ({ Authorization: `Bearer ${WEBHOOK_TOKEN}` });
 
 // ── Mensajería NATS ────────────────────────────────────────────────────────
 /**
@@ -458,8 +453,6 @@ function payloadPorDefecto(servicioId, e) {
   // El cruce se expresa como desfase respecto a la salida programada: es como lo
   // piensa operación ("salió cinco minutos tarde"), y es lo que decide si cae
   // dentro de la ventana de despacho.
-  if (servicioId === 'cu04') return { claveERP: base.claveERP, desfaseMinutos: 5 };
-  if (servicioId === 'cu05') return { claveERP: base.claveERP, desfaseMinutos: 18 };
   if (servicioId === 'reconciliacion') return { claveERP: base.claveERP, desfaseSalida: 5, desfaseLlegada: 18 };
   if (servicioId === 'telemetria') {
     return {
@@ -697,146 +690,6 @@ async function ejecutarCambios(payload, opciones) {
  * acabara de pasar por ahí— y dispara el polling. De ahí en adelante corre el
  * código real: detección, callback firmado, cola durable y BCB.
  */
-async function ejecutarGeocerca(servicioId, payload, opciones) {
-  const salida = servicioId === 'cu04';
-  const pasos = [];
-  const ids = asegurarRegistroInroute();
-
-  if (!escenario || !ids) {
-    return {
-      pasos: [{ titulo: 'No hay corrida cargada', error: true, nota: 'Generá una corrida nueva antes de disparar el cruce.' }],
-      valores: payload,
-    };
-  }
-
-  // Precondición de CU05: sin estación destino, BCB rechaza la confirmación. Se
-  // avisa ANTES de disparar el cruce — si se dispara igual, el satélite marca la
-  // llegada como notificada y el reintento ya no vuelve a mandarla.
-  if (!salida) {
-    const destino = await correrSql(
-      'satelite',
-      `SELECT "destinationId" AS d FROM "TomTomTrip" WHERE "travelCardId" = '${payload.claveERP}'`,
-    ).catch(() => []);
-    if (destino.length && !destino[0].d) {
-      return {
-        pasos: [
-          {
-            titulo: 'La corrida no tiene estación destino registrada',
-            error: true,
-            nota:
-              'El viaje se dio de alta por la cadena completa, y adapter-bcb manda `destinationId` vacío ' +
-              '(TravelCardRelayService.buildViajePayload). BCB valida ese dato contra la ruta, así que la ' +
-              'confirmación de llegada se rechazaría con 400 y el evento se perdería. ' +
-              'Para verlo funcionar hoy: en el servicio 1, dar de alta con «Directo al satélite» —que sí lleva ' +
-              'la estación— y volver acá.',
-          },
-        ],
-        valores: payload,
-      };
-    }
-  }
-
-  // El cruce se expresa respecto a la salida programada; el polling solo mira la
-  // ventana reciente (35 min), así que un cruce en el futuro no lo vería nadie.
-  const instante = new Date(new Date(escenario.departure).getTime() + Number(payload.desfaseMinutos || 0) * 60_000);
-  const minutosAtras = (Date.now() - instante.getTime()) / 60_000;
-  const evento = inroute.programarEvento({
-    nVehiculo: ids.nVehicleId,
-    nGeoCerca: salida ? GEOCERCA_ORIGEN : GEOCERCA_DESTINO,
-    nTipo: salida ? 2 : 1,
-    at: instante,
-  });
-
-  pasos.push({
-    titulo: salida ? 'La unidad cruzó la geocerca de origen' : 'La unidad entró a la geocerca de destino',
-    nota:
-      `Cruce registrado en InRoute a las ${evento.dFechaHoraEvento} (hora del centro), ` +
-      `${Math.abs(Number(payload.desfaseMinutos || 0))} min ${Number(payload.desfaseMinutos || 0) < 0 ? 'antes' : 'después'} de la salida programada.` +
-      (minutosAtras < 0
-        ? ' ⚠ Queda en el futuro: la consulta solo mira los últimos 35 minutos, así que no lo va a ver.'
-        : minutosAtras > 35
-          ? ' ⚠ Quedó fuera de la ventana de consulta (35 minutos hacia atrás).'
-          : ''),
-    datos: evento,
-  });
-
-  // DCU CU03: TomTom EMPUJA el evento al webhook del satélite — el polling ya no
-  // existe (GET /eventosGeocerca responde 404 en el InRoute real). Éste es el
-  // mismo POST que hará el InRoute de Adsum en producción.
-  pasos.push({
-    titulo: 'TomTom empuja el evento al webhook del satélite (CU03)',
-    nota: 'POST /tomtom/eventos-geocerca con el token del webhook. El satélite responde 202 y procesa contra su propia BD (<5 s, regla del DCU).',
-    http: await llamar('POST', `${config.satelite}/tomtom/eventos-geocerca`, {
-      headers: authWebhook(),
-      body: {
-        nVehiculo: ids.nVehicleId,
-        nGeoCerca: salida ? GEOCERCA_ORIGEN : GEOCERCA_DESTINO,
-        nTipo: salida ? 2 : 1,
-        dFechaHoraEvento: evento.dFechaHoraEvento,
-      },
-      timeoutMs: 60000,
-    }),
-  });
-
-  // El satélite marca el evento antes de avisar: si la marca está, el aviso salió.
-  const campo = salida ? 'dispatchedAt' : 'arrivedAt';
-  const marca = await esperarFila(
-    'satelite',
-    `SELECT "dispatchedAt" AS "salida detectada", "arrivedAt" AS "llegada detectada"
-     FROM "TomTomTrip" WHERE "travelCardId" = '${payload.claveERP}'`,
-    25000,
-    (fila) => fila[salida ? 'salida detectada' : 'llegada detectada'] !== null,
-  );
-
-  pasos.push(
-    marca && marca[salida ? 'salida detectada' : 'llegada detectada']
-      ? {
-          titulo: salida ? 'El satélite detectó la salida' : 'El satélite detectó la llegada',
-          nota: `La marca \`${campo}\` se escribe antes de avisar: garantiza que BCB recibe el evento una sola vez.`,
-          datos: marca,
-        }
-      : {
-          titulo: 'El satélite no detectó el cruce',
-          error: true,
-          nota: salida
-            ? 'O el cruce quedó fuera de la ventana de despacho (−45 / +60 min), o fuera de la ventana de consulta, o la corrida ya estaba despachada.'
-            : 'O el cruce quedó fuera de la ventana de consulta, o la llegada ya estaba registrada.',
-          diagnostico: await diagnosticar('satelite'),
-        },
-  );
-
-  // Y del otro lado de la cola: BCB.
-  const enBcb = await esperarFila(
-    'bcb',
-    salida
-      ? `SELECT t.status AS "estado de la corrida", t."realDepartureAt" AS "salida real", b.status AS "estado del autobus"
-         FROM "TravelCard" tc JOIN "Trip" t ON t.id = tc."tripId"
-         LEFT JOIN "TripDispatch" td ON td."tripId" = t.id LEFT JOIN "Bus" b ON b.id = td."busId"
-         WHERE tc.id = '${payload.claveERP}'`
-      : `SELECT tc.status AS "estado de la tarjeta", t."realArrivalAt" AS "llegada real", t.status AS "estado de la corrida"
-         FROM "TravelCard" tc JOIN "Trip" t ON t.id = tc."tripId" WHERE tc.id = '${payload.claveERP}'`,
-    30000,
-    (fila) => fila[salida ? 'salida real' : 'llegada real'] !== null,
-  );
-
-  pasos.push(
-    enBcb && enBcb[salida ? 'salida real' : 'llegada real']
-      ? {
-          titulo: salida ? 'BCB despachó la corrida con su hora real' : 'BCB confirmó la llegada',
-          nota: 'Recorrió el satélite, la cola durable y el adaptador de BCB. Ésta es la validación que importa: BCB es la fuente principal.',
-          datos: enBcb,
-        }
-      : {
-          titulo: salida ? 'La salida no llegó a BCB' : 'La llegada no llegó a BCB',
-          error: true,
-          nota: 'El satélite la detectó pero no terminó de asentarse en BCB.',
-          diagnostico: await diagnosticar('cola'),
-        },
-  );
-
-  return { pasos, valores: payload };
-}
-
 /**
  * 5 · Reconciliación por poll: InRoute ya registró los cruces por su cuenta;
  * el satélite los descubre consultando y deriva despacho/llegada hacia BCB.
@@ -1321,7 +1174,6 @@ const servidor = http.createServer(async (req, res) => {
       let salida;
       if (servicio === 'alta') salida = await ejecutarAlta(payload, opciones);
       else if (servicio === 'cambios') salida = await ejecutarCambios(payload, opciones);
-      else if (servicio === 'cu04' || servicio === 'cu05') salida = await ejecutarGeocerca(servicio, payload, opciones);
       else if (servicio === 'reconciliacion') salida = await ejecutarReconciliacion(payload);
       else if (servicio === 'catalogos') salida = await ejecutarCatalogos(payload, opciones);
       else if (servicio === 'telemetria') salida = await ejecutarTelemetria(payload);

@@ -202,202 +202,13 @@ const cambios = {
   sql: [SQL_VIAJE_SATELITE, SQL_BITACORA],
 };
 
-// ── 3 · CU04 — salida de geocerca ──────────────────────────────────────────
-const cu04 = {
-  id: 'cu04',
-  numero: 3,
-  nombre: 'Salida de la terminal',
-  alias: 'CU04',
-  metodo: 'POST',
-  ruta: '/tomtom/eventos-geocerca',
-  auth: 'Token del webhook (INROUTE_WEBHOOK_TOKEN)',
-  quienLlama: 'TomTom/InRoute, al detectar el cruce (webhook)',
-  direccion: 'InRoute → BIGER → BCB',
-  resumen: 'La unidad cruza la geocerca de la terminal y la corrida queda despachada en BCB, con su hora real.',
 
-  explicacion: [
-    'Cuando la unidad sale físicamente de la terminal, su GPS cruza la **geocerca de origen** y TomTom lo registra. Eso es lo más cercano a la verdad que hay sobre a qué hora salió realmente la corrida.',
-    'El DCU define el modelo como **webhook**: TomTom empuja cada cruce al satélite en tiempo real (POST /tomtom/eventos-geocerca, respuesta 202) — el endpoint de consulta nunca existió en el API real (404). Este botón hace el mismo POST que hará el InRoute de Adsum.',
-    'Si el cruce corresponde a un viaje activo y cae dentro de la ventana permitida, el satélite avisa a BCB —por una cola durable, para que el evento no se pierda si BCB está caído— y la corrida queda **despachada con su hora real**, el autobús pasa a "en viaje", y la operación deja de depender de que alguien lo capture a mano.',
-  ],
-
-  reglas: [
-    'Solo se acepta la salida de la **geocerca de origen** ocurrida entre **45 minutos antes y 60 minutos después** de la salida programada. Fuera de esa ventana el cruce se descarta y queda en bitácora: requiere confirmación manual del jefe de terminal.',
-    'El evento se notifica **una sola vez**. La marca se escribe antes de avisar, así que aunque el proceso programado y este panel coincidan, BCB recibe un solo aviso.',
-    'El satélite firma su propio **JWT RS256** de 5 minutos para llamar al adaptador. Sin esa llave el aviso sale sin credencial, el adaptador responde 401 y el evento se pierde: el satélite no reintenta.',
-    'De ahí a BCB el evento viaja por una **cola durable** con deduplicación de 2 minutos: si BCB está caído, el mensaje espera; si el mismo evento se publica dos veces seguidas, la cola descarta el repetido.',
-    'BCB rechaza (409) una corrida nunca despachada, una cancelada o un autobús que no es el de esa corrida. Un reintento con otra hora **no pisa** la salida ya registrada.',
-    'Solo se miran los viajes activos con salida entre 6 horas antes y 1 hora después del momento de la consulta, de a 50 por corrida.',
-  ],
-
-  actores: [A('unidad'), A('inroute'), A('satelite'), A('adapterTt'), A('jetstream'), A('adapterBcb'), A('appBcb'), A('bdBcb')],
-  pasos: [
-    { de: 'unidad', a: 'inroute', texto: 'La unidad cruza la geocerca de origen', detalle: 'El GPS reporta la salida (nTipo = 2)' },
-    { de: 'inroute', a: 'satelite', texto: 'TomTom empuja el evento al webhook', detalle: 'POST /tomtom/eventos-geocerca (202 · regla <5 s del DCU)' },
-    { de: 'satelite', a: 'adapter-tomtom', texto: 'Avisa el despacho', detalle: 'POST /tomtom/corridas/{corrida}/despachar con su JWT' },
-    { de: 'adapter-tomtom', a: 'jetstream', texto: 'Se encola durable', detalle: 'TOMTOM_GEOCERCAS_STREAM · no se pierde si BCB está caído' },
-    { de: 'jetstream', a: 'adapter-bcb', texto: 'Lo toma el adaptador de BCB', detalle: 'Consumidor durable tomtom-geocercas-workers' },
-    { de: 'adapter-bcb', a: 'app-bcb', texto: 'Despacha la corrida en BCB', detalle: 'POST /corridas/{id}/despachar' },
-    { de: 'app-bcb', a: 'bd-bcb', texto: 'Queda la hora real de salida', detalle: 'Trip.realDepartureAt y el autobús en viaje' },
-  ],
-
-  campos: [
-    { name: 'claveERP', label: 'Tarjeta de viaje (BCB)', tipo: 'text', doc: 'la corrida que se va a despachar' },
-    {
-      name: 'desfaseMinutos',
-      label: 'Cruce respecto a la salida programada (min)',
-      tipo: 'number',
-      doc: 'negativo = se adelantó · dentro de −45 y +60 se acepta',
-    },
-  ],
-
-  entradas: [
-    {
-      id: 'satelite',
-      label: 'Webhook del satélite',
-      ayuda: 'POST /tomtom/eventos-geocerca con el token del webhook — el mismo camino que usará el InRoute de Adsum.',
-    },
-  ],
-
-  sql: [
-    {
-      id: 'corrida',
-      titulo: 'La corrida quedó despachada en BCB',
-      base: 'bcb',
-      descripcion:
-        'Ésta es la validación que importa: BCB es la fuente de datos principal. "salida real" es la hora del cruce de geocerca, no la programada.',
-      query: `SELECT t.status              AS "estado de la corrida",
-       t."departure"         AS "salida programada",
-       t."realDepartureAt"   AS "salida real (geocerca)",
-       t."realArrivalAt"     AS "llegada real",
-       b."economicNumber"    AS "autobus",
-       b.status              AS "estado del autobus",
-       tc.status             AS "estado de la tarjeta"
-FROM "TravelCard" tc
-JOIN "Trip" t ON t.id = tc."tripId"
-LEFT JOIN "TripDispatch" td ON td."tripId" = t.id
-LEFT JOIN "Bus" b ON b.id = td."busId"
-WHERE tc.id = '{{claveERP}}'`,
-    },
-    {
-      id: 'marca',
-      titulo: 'El satélite anotó la salida',
-      base: 'satelite',
-      descripcion:
-        'La marca local es lo que garantiza que el aviso se manda una sola vez, aunque el cron y el panel disparen a la vez.',
-      query: `SELECT "travelCardId" AS "tarjeta de viaje",
-       "nTripId"      AS "id en InRoute",
-       "dispatchedAt" AS "salida detectada",
-       "arrivedAt"    AS "llegada detectada"
-FROM "TomTomTrip"
-WHERE "travelCardId" = '{{claveERP}}'`,
-    },
-  ],
-};
-
-// ── 4 · CU05 — llegada a destino ───────────────────────────────────────────
-const cu05 = {
-  id: 'cu05',
-  numero: 4,
-  nombre: 'Llegada a destino',
-  alias: 'CU05',
-  metodo: 'POST',
-  ruta: '/tomtom/eventos-geocerca',
-  auth: 'Token del webhook (INROUTE_WEBHOOK_TOKEN)',
-  quienLlama: 'TomTom/InRoute, al detectar el cruce (webhook)',
-  direccion: 'InRoute → BIGER → BCB',
-  resumen: 'La unidad entra a la geocerca de la terminal destino: se confirma la tarjeta y quedan libres el autobús y el operador.',
-
-  explicacion: [
-    'Al final del trayecto la unidad entra a la **geocerca de la terminal destino**. Ese cruce cierra el ciclo de la corrida.',
-    'BIGER lo detecta con el mismo polling que el servicio anterior y se lo avisa a BCB, que **confirma la tarjeta de viaje**, guarda la hora real de llegada y —esto es lo que le importa a operación— **libera al autobús y al operador en la terminal destino**, listos para su siguiente asignación.',
-    'Antes esa confirmación dependía de que alguien la capturara. Con la geocerca ocurre sola, con la hora real, y el tablero de la torre de control deja de tener corridas abiertas que ya llegaron.',
-  ],
-
-  reglas: [
-    'La llegada **no tiene ventana de tiempo**: se toma el primer cruce de entrada a la geocerca de destino.',
-    'BCB confirma la tarjeta, marca la corrida como confirmada y mueve autobús y operador a la terminal destino, disponibles.',
-    'Si alguien ya confirmó la tarjeta **a mano** —abordaje móvil, operación—, el evento no vuelve a mover nada: el autobús pudo haber sido reasignado a otra corrida.',
-    'Se rechaza (409) una geocerca que corresponde a **otra terminal**: una geocerca mal mapeada no debe mover la unidad a un destino equivocado.',
-    'Un reintento no duplica el registro ni pisa la llegada original.',
-    '**Punto abierto a revisar con BCB:** BCB valida que la estación destino del aviso sea la de la ruta, pero el evento que arma adapter-bcb llega al satélite con ese campo **vacío**. Con el viaje dado de alta por la cadena completa, la confirmación se rechaza; con el alta «directo al satélite» —que sí lleva la estación— el ciclo cierra. Es un campo que falta en `TravelCardRelayService.buildViajePayload`.',
-  ],
-
-  actores: [A('unidad'), A('inroute'), A('satelite'), A('adapterTt'), A('jetstream'), A('adapterBcb'), A('appBcb'), A('bdBcb')],
-  pasos: [
-    { de: 'unidad', a: 'inroute', texto: 'La unidad entra a la geocerca de destino', detalle: 'El GPS reporta la entrada (nTipo = 1)' },
-    { de: 'inroute', a: 'satelite', texto: 'TomTom empuja el evento al webhook', detalle: 'POST /tomtom/eventos-geocerca (202 · regla <5 s del DCU)' },
-    { de: 'satelite', a: 'adapter-tomtom', texto: 'Avisa la llegada', detalle: 'POST /tomtom/tarjetas-viaje/{tarjeta}/confirmar-llegada' },
-    { de: 'adapter-tomtom', a: 'jetstream', texto: 'Se encola durable', detalle: 'TOMTOM_GEOCERCAS_STREAM' },
-    { de: 'jetstream', a: 'adapter-bcb', texto: 'Lo toma el adaptador de BCB', detalle: '' },
-    { de: 'adapter-bcb', a: 'app-bcb', texto: 'Confirma la llegada en BCB', detalle: 'POST /tarjetas-viaje/{id}/confirmar-llegada' },
-    { de: 'app-bcb', a: 'bd-bcb', texto: 'Tarjeta confirmada, unidad liberada', detalle: 'Bus y operador quedan disponibles en la terminal destino' },
-  ],
-
-  campos: [
-    { name: 'claveERP', label: 'Tarjeta de viaje (BCB)', tipo: 'text', doc: 'la corrida que llega a destino' },
-    {
-      name: 'desfaseMinutos',
-      label: 'Cruce respecto a la salida programada (min)',
-      tipo: 'number',
-      doc: 'la llegada no tiene ventana: cualquier valor se acepta',
-    },
-  ],
-
-  entradas: [
-    {
-      id: 'adapter',
-      label: 'Desde el proceso programado',
-      ayuda: 'Publica biger.tomtom.geocercas.sync, igual que el cron de las 30 minutos.',
-    },
-    { id: 'satelite', label: 'Directo al satélite', ayuda: 'Dispara el polling llamando al satélite, saltando la mensajería.' },
-  ],
-
-  sql: [
-    {
-      id: 'llegada',
-      titulo: 'La llegada quedó confirmada en BCB',
-      base: 'bcb',
-      descripcion:
-        'La tarjeta pasa a confirmada y la corrida guarda su hora real de llegada. Si esto aparece, el ciclo se cerró solo, sin captura manual.',
-      query: `SELECT tc.status           AS "estado de la tarjeta",
-       tc."confirmedAt"    AS "confirmada el",
-       t.status            AS "estado de la corrida",
-       t."realDepartureAt" AS "salida real",
-       t."realArrivalAt"   AS "llegada real"
-FROM "TravelCard" tc
-JOIN "Trip" t ON t.id = tc."tripId"
-WHERE tc.id = '{{claveERP}}'`,
-    },
-    {
-      id: 'unidad',
-      titulo: 'El autobús y el operador quedaron libres en destino',
-      base: 'bcb',
-      descripcion:
-        'Lo que operación mira: la unidad ya no está "en viaje" y aparece en la terminal a la que llegó, disponible para su siguiente corrida.',
-      query: `SELECT b."economicNumber" AS "autobus",
-       b.status           AS "estado del autobus",
-       eb."shortName"     AS "autobus en",
-       o.key              AS "operador",
-       o."tripStatus"     AS "estado del operador",
-       eo."shortName"     AS "operador en"
-FROM "TravelCard" tc
-JOIN "Trip" t ON t.id = tc."tripId"
-JOIN "TripDispatch" td ON td."tripId" = t.id
-JOIN "Bus" b ON b.id = td."busId"
-JOIN "Operator" o ON o.id = td."operatorId"
-LEFT JOIN "Station" eb ON eb.id = b."stationId"
-LEFT JOIN "Station" eo ON eo.id = o."stationId"
-WHERE tc.id = '{{claveERP}}'`,
-    },
-  ],
-};
 
 
 // ── 5 · Reconciliación por poll (el mecanismo activo de CU04/CU05) ─────────
 const reconciliacion = {
   id: 'reconciliacion',
-  numero: 5,
+  numero: 3,
   nombre: 'Reconciliación por poll',
   alias: 'Poll',
   metodo: 'POST',
@@ -409,7 +220,7 @@ const reconciliacion = {
     'El satélite consulta InRoute, encuentra los cruces de geocerca que InRoute ya registró por su cuenta, y despacha/confirma en BCB — sin depender del webhook.',
 
   explicacion: [
-    'Los servicios 3 y 4 muestran el camino **webhook**: TomTom nos empuja cada cruce. Ese registro con Adsum sigue pendiente, así que hoy el webhook está **dormido** — y este es el mecanismo que de verdad corre en producción.',
+    'El DCU planteaba un **webhook**: que TomTom nos empujara cada cruce. Ese registro con Adsum nunca se acordó y **se retiró por decisión del cliente** — este poll es EL mecanismo de despacho y llegada en producción.',
     'La clave: InRoute registra los cruces **por su cuenta** y los deja escritos en el viaje (`cFechaSalidaReal`, `cFechaLlegadaReal`). El satélite no necesita que nadie le avise: cada 2 minutos consulta los viajes de las corridas vigentes en **una sola llamada** y deriva los mismos dos eventos que dispararía el webhook.',
     'La hora que se registra en BCB es la que InRoute capturó **en el momento del cruce**, no la hora del poll: el intervalo solo determina cuánto tarda BCB en enterarse (~2 min), nunca la precisión del dato.',
   ],
@@ -418,7 +229,7 @@ const reconciliacion = {
     'Corre bajo el scheduler del satélite (`SCHEDULER_ENABLED=true`, intervalo `RECONCILIACION_INTERVAL_MINUTES`, default **2 min**); el candado en Postgres garantiza que solo una réplica ejecute cada disparo.',
     'InRoute tarda ~5 s por consulta (medido en sandbox): todo el lote viaja en **una llamada** con las claves en trozos de 40 (`clavesERP` repetido = unión, verificado contra el sandbox real).',
     'Aplica la **misma ventana de despacho** que el webhook: salida real entre −45 y +60 min de la programada; fuera de eso se descarta con aviso en el log.',
-    'Convive con el webhook sin duplicar: ambos comparten las marcas `dispatchedAt`/`arrivedAt` (el primero que llega gana), y si el aviso a BCB falla, la marca se **revierte** para que el siguiente ciclo reintente.',
+    'Sin duplicados: las marcas `dispatchedAt`/`arrivedAt` garantizan un solo aviso por evento, y si el aviso a BCB falla, la marca se **revierte** para que el siguiente ciclo reintente.',
     'BCB sigue siendo la autoridad: una corrida nunca despachada por operación (OPEN) o cancelada se rechaza con 409, y el 409 se acepta como "ya aplicado" — nunca envenena la cola.',
   ],
 
@@ -426,7 +237,7 @@ const reconciliacion = {
   pasos: [
     { de: 'satelite', a: 'inroute', texto: 'El poll consulta las corridas vigentes', detalle: 'GET /viajes · clavesERP en trozos de 40 · cada 2 min' },
     { de: 'inroute', a: 'satelite', texto: 'InRoute devuelve los cruces que él mismo registró', detalle: 'cFechaSalidaReal / cFechaLlegadaReal ("" = aún sin cruce)' },
-    { de: 'satelite', a: 'adapter-tomtom', texto: 'Deriva el despacho y/o la llegada', detalle: 'los mismos callbacks CU04/CU05 que dispararía el webhook' },
+    { de: 'satelite', a: 'adapter-tomtom', texto: 'Deriva el despacho y/o la llegada', detalle: 'los callbacks CU04/CU05, con la hora real del cruce' },
     { de: 'adapter-tomtom', a: 'jetstream', texto: 'Se encola durable', detalle: 'TOMTOM_GEOCERCAS_STREAM · dedup por Msg-Id' },
     { de: 'jetstream', a: 'adapter-bcb', texto: 'Lo toma el adaptador de BCB', detalle: 'Consumidor durable tomtom-geocercas-workers' },
     { de: 'adapter-bcb', a: 'app-bcb', texto: 'Despacha y confirma en BCB', detalle: 'con la hora real que registró InRoute' },
@@ -478,7 +289,7 @@ WHERE tc.id = '{{claveERP}}'`,
       titulo: 'Las marcas del satélite (guarda de carrera con el webhook)',
       base: 'satelite',
       descripcion:
-        'dispatchedAt/arrivedAt se escriben antes de avisar y se comparten con el camino webhook: el primero que llega gana, el otro no duplica.',
+        'dispatchedAt/arrivedAt se escriben antes de avisar: garantizan que BCB recibe cada evento una sola vez.',
       query: `SELECT "travelCardId" AS "tarjeta",
        "dispatchedAt"  AS "salida detectada",
        "arrivedAt"     AS "llegada detectada",
@@ -493,7 +304,7 @@ WHERE "travelCardId" = '{{claveERP}}'`,
 // ── 5 · Catálogos de InRoute ───────────────────────────────────────────────
 const catalogos = {
   id: 'catalogos',
-  numero: 6,
+  numero: 4,
   nombre: 'Catálogos de InRoute',
   alias: 'Consultas',
   metodo: 'GET',
@@ -552,7 +363,7 @@ ORDER BY "createdAt" DESC`,
 // ── 6 · Telemetría del viaje terminado ─────────────────────────────────────
 const telemetria = {
   id: 'telemetria',
-  numero: 7,
+  numero: 5,
   nombre: 'Telemetría del viaje',
   alias: 'Cierre',
   metodo: 'Proceso programado',
@@ -619,6 +430,6 @@ WHERE t."travelCardId" = '{{claveERP}}'`,
   ],
 };
 
-const SERVICIOS = [alta, cambios, cu04, cu05, reconciliacion, catalogos, telemetria];
+const SERVICIOS = [alta, cambios, reconciliacion, catalogos, telemetria];
 
 module.exports = { SERVICIOS, ACTORES };
