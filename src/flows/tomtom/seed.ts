@@ -9,6 +9,7 @@ import { BusStatus, BusType, CollectionType, OperatorTripStatus, StationType, Tr
 import { bcbDb } from '@harness/db';
 import { execSync } from 'child_process';
 import { randomUUID } from 'crypto';
+import { DEDICADOS as DEMO_DEDICADOS } from './demo';
 import { allScenarios, catalog, type Scenario } from './scenarios';
 
 const E2E = { startsWith: 'E2E-' } as const;
@@ -36,6 +37,35 @@ async function wipe(): Promise<void> {
   await db.travelCard.deleteMany({ where: { id: { in: cardIds } } });
   await db.tripDispatch.deleteMany({ where: { tripId: { in: tripIds } } });
   await db.trip.deleteMany({ where: { id: { in: tripIds } } });
+  // Registros dedicados de la demo en modo real: llevan claves del SANDBOX
+  // (unidad 675, ruta 200…) que no matchean el patrón E2E%, pero referencian
+  // las estaciones/servicios del catálogo — sin esto el wipe muere por FK.
+  // Primero las corridas que los referencian (incluye residuos de seeds que
+  // murieron a medias): se buscan por REFERENCIA, no por marcador.
+  const dispatchDemo = await db.tripDispatch.findMany({
+    where: { OR: [{ busId: DEMO_DEDICADOS.busId }, { operatorId: DEMO_DEDICADOS.operadorId }] },
+    select: { tripId: true },
+  });
+  const tripsRutaDemo = await db.trip.findMany({
+    where: { routeId: DEMO_DEDICADOS.routeId },
+    select: { id: true },
+  });
+  const tripsDemo = [...new Set([...dispatchDemo.map((d) => d.tripId), ...tripsRutaDemo.map((t) => t.id)])];
+  if (tripsDemo.length) {
+    const cardsDemo = (
+      await db.travelCard.findMany({ where: { tripId: { in: tripsDemo } }, select: { id: true } })
+    ).map((c) => c.id);
+    await db.travelCardStatusLog.deleteMany({ where: { travelCardId: { in: cardsDemo } } });
+    await db.tomTomTripData.deleteMany({ where: { travelCardId: { in: cardsDemo } } });
+    await db.travelCardTomTomSync.deleteMany({ where: { travelCardId: { in: cardsDemo } } });
+    await db.travelCard.deleteMany({ where: { id: { in: cardsDemo } } });
+    await db.tripDispatch.deleteMany({ where: { tripId: { in: tripsDemo } } });
+    await db.trip.deleteMany({ where: { id: { in: tripsDemo } } });
+  }
+  await db.bus.deleteMany({ where: { id: DEMO_DEDICADOS.busId } });
+  await db.operator.deleteMany({ where: { id: DEMO_DEDICADOS.operadorId } });
+  await db.route.deleteMany({ where: { id: DEMO_DEDICADOS.routeId } });
+  await db.service.deleteMany({ where: { id: DEMO_DEDICADOS.serviceId } });
   await db.bus.deleteMany({ where: { economicNumber: E2E } });
   await db.operator.deleteMany({ where: { key: E2E } });
   await db.route.deleteMany({ where: { id: { in: routeIds } } });
@@ -257,7 +287,12 @@ export async function createChainTrip(s: Scenario): Promise<{ tripId: string; ca
 
   // departure única: Trip tiene @@unique([routeId, departure]).
   const departure = new Date(Date.now() + 7_200_000 + s.n * 60_000 + Math.floor(Math.random() * 3_600_000));
-  const tripId = randomUUID();
+  // Trip.id como en la BD REAL de BCB: la clave de corrida (llave natural, p.ej.
+  // "AFRPS1100N0000002"), NO un uuid. Importa aguas abajo: viaja a InRoute como
+  // cClaveERP del viaje, cObjectNo de la orden la trunca a 20 chars, y el routeId
+  // derivado sale de su prefijo alfabético. Única por corrida (sufijo de reloj)
+  // para no caer en la dedup de 2 min de JetStream (msgId se deriva de este id).
+  const tripId = `E2EPS${s.n}${String(Date.now()).slice(-8)}N`;
   const cardId = randomUUID();
 
   await db.trip.create({

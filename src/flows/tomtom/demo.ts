@@ -37,7 +37,7 @@ export type DemoRefs = {
   serviceName?: string;
 };
 
-const DEDICADOS = {
+export const DEDICADOS = {
   busId: 'e2e00003-0000-4000-8000-0000000de301',
   operadorId: 'e2e00004-0000-4000-8000-0000000de301',
   routeId: 'e2e00000-0000-4000-8000-0000000de301',
@@ -174,7 +174,8 @@ export async function demoTrip(refs?: DemoRefs): Promise<DemoTrip> {
   // caen los dos en la ventana. El desfase aleatorio da unicidad: Trip tiene
   // @@unique([routeId, departure]).
   const departure = new Date(Date.now() - 20 * 60_000 - Math.floor(Math.random() * 300_000));
-  const tripId = randomUUID();
+  // Trip.id como en la BD real de BCB: clave de corrida, no uuid (ver seed.ts).
+  const tripId = `E2EDM${String(Date.now()).slice(-9)}N`;
   const cardId = randomUUID();
 
   await db.trip.create({
