@@ -61,7 +61,18 @@ const CONFIG_DEFAULT = {
     // El satélite lee esta dirección al arrancar (INROUTE_BASE_URL en su .env),
     // así que el puerto es fijo: lo escribe `flows/tomtom/flow.sh`.
     puertoEscucha: Number(process.env.E2E_FAKE_INROUTE_PORT || 7803),
-    timeoutMs: 20000,
+    // /grupos del sandbox real pesa ~8 MB y tarda >20 s: el proxy no corta antes que el satélite (30 s).
+    timeoutMs: 60000,
+    // Claves que SÍ existen en el sandbox de Adsum (verificadas): en modo real
+    // la corrida de demostración se crea en BCB con estas, porque las E2E-* del
+    // catálogo simulado no existen allá y el alta fallaría con
+    // "Trip instruction not found".
+    refs: {
+      unidad: process.env.E2E_INROUTE_BUS || '675',
+      operador: process.env.E2E_INROUTE_OP || '303258',
+      instruccion: process.env.E2E_INROUTE_ROUTE || '200',
+      grupo: process.env.E2E_INROUTE_GRUPO || 'Primera Clase',
+    },
   },
 };
 
@@ -314,9 +325,28 @@ function correr(cmd, args, opciones = {}) {
   });
 }
 
-/** La corrida de demostración la crea el harness, que tiene el Prisma de BCB. */
-const crearCorrida = () =>
-  correr('pnpm', ['exec', 'tsx', 'src/cli.ts', 'tomtom', 'demo-trip'], { cwd: E2E_ROOT });
+/**
+ * La corrida de demostración la crea el harness, que tiene el Prisma de BCB.
+ * En modo real lleva las claves del sandbox de Adsum (config.inroute.refs):
+ * unidad/operador/instrucción que existen allá — las E2E-* solo existen en el
+ * catálogo simulado y el alta fallaría con "Trip instruction not found".
+ */
+const crearCorrida = () => {
+  const args = ['exec', 'tsx', 'src/cli.ts', 'tomtom', 'demo-trip'];
+  if (config.inroute.modo === 'real') {
+    const r = config.inroute.refs || {};
+    args.push(
+      JSON.stringify({
+        economicNumber: r.unidad || '675',
+        operatorKey: r.operador || '303258',
+        routeNumber: r.instruccion || '200',
+        routeName: 'Ruta sandbox (Adsum)',
+        serviceName: r.grupo || 'Primera Clase',
+      }),
+    );
+  }
+  return correr('pnpm', args, { cwd: E2E_ROOT });
+};
 
 /**
  * El proceso programado de telemetría corre con el código COMPILADO del satélite
@@ -490,7 +520,10 @@ async function ejecutarAlta(payload, opciones) {
   const alta = await esperarInroute(
     (r) => r.metodo === 'POST' && r.ruta === '/viajes' && r.payloadEnviado && r.payloadEnviado.cClaveERP === payload.tripId,
     desde,
-    entrada === 'bcb' ? 40000 : 20000,
+    // Contra el sandbox real la PRIMERA alta de un par unidad/operador tarda
+    // ~80 s (solo /grupos pesa 8 MB y toma ~44 s); con equivalencias cacheadas
+    // baja a segundos. El watcher no debe declarar el fallo antes de tiempo.
+    config.inroute.modo === 'real' ? 180000 : entrada === 'bcb' ? 40000 : 20000,
   );
 
   if (alta) {
@@ -810,6 +843,22 @@ async function ejecutarGeocerca(servicioId, payload, opciones) {
  * Es el mecanismo ACTIVO en producción (el webhook está dormido).
  */
 async function ejecutarReconciliacion(payload) {
+  if (config.inroute.modo === 'real') {
+    return {
+      pasos: [
+        {
+          titulo: 'El sandbox real no tiene unidades transmitiendo',
+          error: true,
+          nota:
+            'Este momento necesita que el motor de InRoute registre cruces reales (cFechaSalidaReal/cFechaLlegadaReal), ' +
+            'y en el sandbox de Adsum ninguna unidad se mueve. El poll real del satélite sí corre y consulta — pero ' +
+            'nunca encuentra cruces que derivar. Para VER el mecanismo completo, cambiá InRoute a modo simulado; ' +
+            'contra el sandbox, este punto queda pendiente de validar con Adsum con una unidad viva.',
+        },
+      ],
+      valores: payload,
+    };
+  }
   const pasos = [];
   const ids = asegurarRegistroInroute();
   if (!escenario || !ids) {

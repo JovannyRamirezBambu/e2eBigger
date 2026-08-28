@@ -109,7 +109,9 @@ async function main(): Promise<number> {
           return 1;
         }
         const { demoTrip } = await import('./flows/tomtom/demo');
-        console.log(JSON.stringify(await demoTrip()));
+        // arg opcional: JSON con las claves reales del sandbox (modo real del panel)
+        const refs = arg ? (JSON.parse(arg) as import('./flows/tomtom/demo').DemoRefs) : undefined;
+        console.log(JSON.stringify(await demoTrip(refs)));
         return 0;
       }
 
