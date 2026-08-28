@@ -365,7 +365,7 @@ function manejar(falso, metodo, ruta, query, cuerpo) {
           nStatusViaje: num(query.nEstatus),
         }),
       )
-      .filter((v) => !query.clavesERP || v.cClaveERP === query.clavesERP)
+      .filter((v) => coincideClaveERP(query.clavesERP, v.cClaveERP))
       .map(publico);
   }
 
@@ -525,7 +525,7 @@ function manejar(falso, metodo, ruta, query, cuerpo) {
   if (metodo === 'GET' && ruta === '/instruccionesViaje') {
     return e.instrucciones
       .filter((i) => coincide(i, { nInstruccionViaje: num(query.nInstruccionViaje), bActivo: bool(query.bActivo) }))
-      .filter((i) => !query.clavesERP || i.cClaveERP === query.clavesERP);
+      .filter((i) => coincideClaveERP(query.clavesERP, i.cClaveERP));
   }
 
   if (metodo === 'GET' && (ruta === '/instruccionesViaje/waypoints/all' || ruta === '/instruccionesViaje/waypoints/all/')) {
@@ -596,6 +596,11 @@ const publico = (viaje) => Object.fromEntries(Object.entries(viaje).filter(([k])
  * @param obtenerConfig  devuelve { modo, url, usuario, password, timeoutMs }
  * @param alRecibir      callback con el registro de cada llamada (para el panel)
  */
+function coincideClaveERP(filtro, clave) {
+  if (!filtro) return true;
+  return Array.isArray(filtro) ? filtro.includes(clave) : clave === filtro;
+}
+
 function crearServidorInroute(falso, obtenerConfig, alRecibir) {
   return http.createServer((req, res) => {
     let crudo = '';
@@ -603,6 +608,11 @@ function crearServidorInroute(falso, obtenerConfig, alRecibir) {
     req.on('end', async () => {
       const url = new URL(req.url, 'http://inroute.local');
       const query = Object.fromEntries(url.searchParams.entries());
+      // InRoute bindea clavesERP como lista .NET: el parámetro repetido
+      // (clavesERP=A&clavesERP=B) une resultados; la forma con comas NO
+      // matchea (verificado en sandbox). Se preservan todos los valores.
+      const clavesERP = url.searchParams.getAll('clavesERP');
+      if (clavesERP.length > 0) query.clavesERP = clavesERP;
       let cuerpo = {};
       try {
         cuerpo = crudo ? JSON.parse(crudo) : {};
