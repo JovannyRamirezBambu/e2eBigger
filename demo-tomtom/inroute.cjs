@@ -75,8 +75,9 @@ function estadoInicial() {
       { nGeocerca: GEOCERCA_DESTINO, cDescripcion: 'Terminal de destino (demo)', bActivo: true },
     ],
     ubicacionesFrecuentes: [
-      { nUbicacionFrecuente: 51, cDescripcion: 'Terminal de origen (demo)', cClaveERP: 'E2E-ORI', bActivo: true },
-      { nUbicacionFrecuente: 54, cDescripcion: 'Terminal de destino (demo)', cClaveERP: 'E2E-DST', bActivo: true },
+      // Contrato real: lat/lon vienen multiplicadas por 10^6 y con cDomicilio.
+      { nUbicacionFrecuente: 51, cDescripcion: 'Terminal de origen (demo)', cClaveERP: 'E2E-ORI', cDomicilio: 'Terminal de origen (demo)', nLatitud: 19074661, nLongitud: -98202567, bActivo: true },
+      { nUbicacionFrecuente: 54, cDescripcion: 'Terminal de destino (demo)', cClaveERP: 'E2E-DST', cDomicilio: 'Terminal de destino (demo)', nLatitud: 19428469, nLongitud: -99113018, bActivo: true },
     ],
     motivosCancelacion: [
       { nMotivoCancelacion: 1, cDescripcion: 'Cancelación operativa' },
@@ -326,7 +327,8 @@ function manejar(falso, metodo, ruta, query, cuerpo) {
     // Contrato real (error 3008): el viaje exige al menos una orden asignada.
     const ordenes = cuerpo.Ordenes || cuerpo.ordenes || [];
     if (!cuerpo.nViaje && (!Array.isArray(ordenes) || ordenes.length === 0)) {
-      return { _status: 500, codigo: 3008, mensaje: 'Es necesario asignar al menos una orden.' };
+      // Verificado 28/08: los errores de validación de negocio responden HTTP 400.
+      return { _status: 400, codigo: 3008, mensaje: 'Es necesario asignar al menos una orden.' };
     }
 
     const existente = cuerpo.nViaje
@@ -359,10 +361,12 @@ function manejar(falso, metodo, ruta, query, cuerpo) {
       cFechaSalidaPlaneada: cuerpo.cFechaSalidaPlaneada,
       nHoraSalidaPlaneada: cuerpo.nHoraSalidaPlaneada,
       cHoraSalidaPlaneada: horaDeMinutos(cuerpo.nHoraSalidaPlaneada),
-      cFechaSalidaReal: null,
-      cHoraSalidaReal: null,
-      cFechaLlegadaReal: null,
-      cHoraLlegadaReal: null,
+      // Contrato real: mientras el cruce no ocurre, los tiempos reales llegan
+      // como cadena VACÍA, no como null.
+      cFechaSalidaReal: '',
+      cHoraSalidaReal: '',
+      cFechaLlegadaReal: '',
+      cHoraLlegadaReal: '',
       nDistanciaRecorrida: null,
       nConsumoGasolina: null,
       nRendimientoGasolina: null,
@@ -382,7 +386,8 @@ function manejar(falso, metodo, ruta, query, cuerpo) {
       return { _status: 500, codigo: 3014, mensaje: 'No se encontró el motivo de cancelación con el id proporcionado' };
     }
     viaje.nStatusViaje = 7; // Cancelado
-    viaje.cMotivoCancelacion = cuerpo.cMotivoDescripcion;
+    viaje.nMotivoCancelacion = Number(cuerpo.nMotivoCancelacion);
+    viaje.cMotivoDescripcion = cuerpo.cMotivoDescripcion;
     return {};
   }
 
@@ -393,7 +398,7 @@ function manejar(falso, metodo, ruta, query, cuerpo) {
       if (uno.length === 0) return { _status: 500, codigo: 3016, mensaje: 'No se encontraron viajes.' };
       return uno.map(publico);
     }
-    return e.viajes
+    const lista = e.viajes
       .filter((v) =>
         coincide(v, {
           nViaje: num(query.nViaje),
@@ -406,6 +411,22 @@ function manejar(falso, metodo, ruta, query, cuerpo) {
       )
       .filter((v) => coincideClaveERP(query.clavesERP, v.cClaveERP))
       .map(publico);
+
+    // Contrato real (28/08): el tope de 24 horas del rango YA NO existe (60 días
+    // responden 200) — pero las fechas SIN hora no parsean y truenan con 1000.
+    if (query.cFechaInicio && query.cFechaFin) {
+      const conHora = (t) => /\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}/.test(String(t));
+      if (!conHora(query.cFechaInicio) || !conHora(query.cFechaFin)) {
+        return { _status: 500, codigo: 1000, mensaje: 'Ocurrio un error inesperado, favor de contactar a su proveedor' };
+      }
+    }
+
+    // Contrato real: un filtro por claves que no matchea nada responde 3016,
+    // no una lista vacía.
+    if (query.clavesERP && lista.length === 0) {
+      return { _status: 500, codigo: 3016, mensaje: 'No se encontraron viajes.' };
+    }
+    return lista;
   }
 
   // GET /eventosGeocerca NO existe en el API real (404 verificado): el modelo del
@@ -530,7 +551,7 @@ function manejar(falso, metodo, ruta, query, cuerpo) {
   if (metodo === 'POST' && ruta === '/ordenes') {
     // Contrato real (4001): clave ERP duplicada al crear sin nOrden.
     if (!cuerpo.nOrden && cuerpo.cObjectNo && e.ordenes.some((o) => (o.cObjectNo || '').trim() === String(cuerpo.cObjectNo).trim())) {
-      return { _status: 500, codigo: 4001, mensaje: 'Ya existe una orden con la clave ERP proporcionada.' };
+      return { _status: 400, codigo: 4001, mensaje: 'Ya existe una orden con la clave ERP proporcionada.' };
     }
     return guardar(e.ordenes, 'nOrden', (id) => ({
       nOrden: id,
