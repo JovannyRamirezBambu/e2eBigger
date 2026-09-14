@@ -20,6 +20,7 @@ const FLOWS: Record<string, () => Promise<{ flow: Flow }>> = {
   tomtom: () => import('./flows/tomtom/index'),
   ventaabordo: () => import('./flows/ventaabordo/index'),
   ticketcolectoroffline: () => import('./flows/ticketcolectoroffline/index'),
+  agencias: () => import('./flows/agencias/index'),
 };
 
 async function loadFlow(name: string): Promise<Flow> {
