@@ -621,14 +621,18 @@ export const cases: CaseDef[] = [
       const email = `nueva.${Date.now()}@example.com`;
       const r = await adminPost('/agencies', {
         nombreComercial: 'Agencia Nueva E2E',
-        razonSocial: 'Agencia Nueva E2E SA de CV',
-        rfc,
-        email,
-        telefono: '2223334455',
-        direccion: 'Av. Nueva 1',
-        ciudad: 'Atlixco',
         creditLimit: 10000,
         porcentajeDescuento: 5,
+        sucursales: [
+          {
+            rfc,
+            razonSocial: 'Agencia Nueva E2E SA de CV',
+            email,
+            telefono: '2223334455',
+            direccion: 'Av. Nueva 1',
+            ciudad: 'Atlixco',
+          },
+        ],
       });
 
       t.is('status', 201, r.status, r.text.slice(0, 300));
@@ -676,6 +680,75 @@ export const cases: CaseDef[] = [
       t.is('se restaura la contraseña sembrada', 204, revertir.status, revertir.text.slice(0, 200));
       const final = await login();
       t.is('el login original vuelve a funcionar', 200, final.status);
+    },
+  },
+  {
+    name: 'a34-alta-agencia-varios-rfc',
+    label: 'AD02: alta de agencia con dos RFC de una vez, como pide el diseño',
+    run: async (t) => {
+      const sello = Date.now();
+      const rfcUno = rfcUnico('SLO');
+      const rfcDos = rfcUnico('DFN');
+      const correoUno = `operaciones.${sello}@example.com`;
+      const correoDos = `frias.${sello}@example.com`;
+
+      const r = await adminPost('/agencies', {
+        nombreComercial: 'Soluciones Logísticas del Occidente',
+        creditLimit: 80000,
+        porcentajeDescuento: 12,
+        sucursales: [
+          {
+            rfc: rfcUno,
+            razonSocial: 'Soluciones Logísticas del Occidente S.A. de C.V.',
+            email: correoUno,
+            telefono: '3341237788',
+            direccion: 'C. Eligio Ancona 145, CDMX',
+            ciudad: 'Ciudad de México',
+            esPrincipal: true,
+          },
+          {
+            rfc: rfcDos,
+            razonSocial: 'Distribuciones Frías del Occidente',
+            email: correoDos,
+            telefono: '3341237788',
+            direccion: 'C. Eligio Ancona 145, CDMX',
+            ciudad: 'Ciudad de México',
+          },
+        ],
+      });
+
+      t.is('status', 201, r.status, r.text.slice(0, 300));
+      t.is('nace con las dos sucursales', 2, r.body?.totalSucursales);
+
+      const porRfc = Object.fromEntries(
+        (r.body?.sucursales ?? []).map((s: any) => [s.rfc, s]),
+      );
+      // Cada RFC conserva lo suyo: es justo lo que se perdía cuando los DTO de
+      // relay solo declaraban `rfc` e `isPrimary`.
+      t.is('la primera conserva su correo', correoUno, porRfc[rfcUno]?.email);
+      t.is(
+        'la segunda conserva su razón social',
+        'Distribuciones Frías del Occidente',
+        porRfc[rfcDos]?.razonSocial,
+      );
+      t.is(
+        'exactamente una es la principal',
+        1,
+        (r.body?.sucursales ?? []).filter((s: any) => s.esPrincipal).length,
+      );
+      t.is('y es la marcada', true, porRfc[rfcUno]?.esPrincipal);
+      t.is(
+        'los datos de contacto de la agencia salen de la principal',
+        correoUno,
+        r.body?.email,
+      );
+
+      // Las dos pueden iniciar sesión: el correo de cualquiera es identificador.
+      const listado = await adminGet(`/agencies/${r.body?.id}/sucursales`);
+      t.is('ambas quedan vivas', 2, listado.body?.data?.length);
+
+      const borrado = await adminDelete(`/agencies/${r.body?.id}`);
+      t.is('se elimina con sus dos sucursales', 204, borrado.status, borrado.text.slice(0, 200));
     },
   },
 ];
