@@ -751,4 +751,32 @@ export const cases: CaseDef[] = [
       t.is('se elimina con sus dos sucursales', 204, borrado.status, borrado.text.slice(0, 200));
     },
   },
+  {
+    name: 'a35-sin-limite-de-credito',
+    label: 'AD09: la casilla "Sin límite de crédito" deja el tope en null y no bloquea la venta',
+    run: async (t) => {
+      const sinTope = await adminPut(`/agencies/${AGENCIA.id}`, {
+        sinLimiteCredito: true,
+      });
+      t.is('status', 200, sinTope.status, sinTope.text.slice(0, 300));
+      t.is('creditLimit queda en null', null, sinTope.body?.creditLimit);
+      // Sin tope no hay disponible que calcular.
+      t.is('saldoDisponible también', null, sinTope.body?.saldoDisponible);
+
+      // La copia local del satélite refleja el null, no un 0.
+      const detalle = await adminGet(`/agencies/${AGENCIA.id}`);
+      t.is('el detalle lo confirma', null, detalle.body?.creditLimit);
+
+      const conTope = await adminPut(`/agencies/${AGENCIA.id}`, {
+        creditLimit: 50000,
+        sinLimiteCredito: false,
+      });
+      t.is('vuelve a tener tope', 50000, conTope.body?.creditLimit);
+      t.is(
+        'y el disponible se vuelve a calcular',
+        50000 - (conTope.body?.currentDebt ?? 0),
+        conTope.body?.saldoDisponible,
+      );
+    },
+  },
 ];

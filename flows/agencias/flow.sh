@@ -190,37 +190,38 @@ PY
   # Solo se sustituye SecretManagerService: devuelve el secreto del rol agency como JSON
   # {privateKey, kid, iss} (igual que en AWS). Ojo: NO se pasan JWT_AGENCY_ISS/KID por
   # entorno a propósito — así se prueba que BCB los toma del secreto.
+  # Se reinicia siempre, como el satélite: son los apps que se están escribiendo y
+  # reutilizar el proceso hacía correr las pruebas contra el código anterior (una ruta
+  # nueva daba 404 y un campo nuevo del DTO daba 400 "should not exist").
   if is_running bcb-auth; then
-    dim "   app auth ya corriendo"
-  else
-    stop_bg bcb-auth
-    ensure_port_free "$PORT_BCB_AUTH" "app auth"
-    graft "$E2E_ROOT/lib/bcb-auth-bootstrap.ts" "$REPO_BCB" "scripts/e2e/auth-bootstrap.ts"
-    ( cd "$REPO_BCB" && \
-      DATABASE_URL="$BCB_DB_URL" NODE_ENV=development AWS_REGION=us-west-2 PORT="$PORT_BCB_AUTH" \
-      E2E_AGENCY_ISS="$JWKS_ISSUER" E2E_AGENCY_KID="$kid" \
-      JWT_AGENCY_PRIVATE_KEY_SECRET_NAME="e2e/agency-private-key" \
-      E2E_AGENCY_PRIVATE_KEY_PATH="$(key_path "$LEG_AGENCY-private.pem")" \
-      start_bg bcb-auth "$LOG_DIR/bcb-auth.log" \
-        pnpm exec ts-node -r tsconfig-paths/register scripts/e2e/auth-bootstrap.ts )
+    warn "app auth ya estaba arriba — se reinicia para correr el código actual"
   fi
+  stop_bg bcb-auth
+  ensure_port_free "$PORT_BCB_AUTH" "app auth"
+  graft "$E2E_ROOT/lib/bcb-auth-bootstrap.ts" "$REPO_BCB" "scripts/e2e/auth-bootstrap.ts"
+  ( cd "$REPO_BCB" && \
+    DATABASE_URL="$BCB_DB_URL" NODE_ENV=development AWS_REGION=us-west-2 PORT="$PORT_BCB_AUTH" \
+    E2E_AGENCY_ISS="$JWKS_ISSUER" E2E_AGENCY_KID="$kid" \
+    JWT_AGENCY_PRIVATE_KEY_SECRET_NAME="e2e/agency-private-key" \
+    E2E_AGENCY_PRIVATE_KEY_PATH="$(key_path "$LEG_AGENCY-private.pem")" \
+    start_bg bcb-auth "$LOG_DIR/bcb-auth.log" \
+      pnpm exec ts-node -r tsconfig-paths/register scripts/e2e/auth-bootstrap.ts )
 
   # app `agencies` de BCB — AD01–AD15 (agencias, sucursales, cortes, ventas, catálogos).
   # Guard, DTOs y Prisma reales; solo se sustituyen SecretManagerService (llave pública de
   # prueba), EmailService (correo de alta) y S3Service (XLSX del reporte).
   if is_running bcb-agencies; then
-    dim "   app agencies ya corriendo"
-  else
-    stop_bg bcb-agencies
-    ensure_port_free "$PORT_BCB_AGENCIES" "app agencies"
-    graft "$E2E_ROOT/lib/bcb-agencies-bootstrap.ts" "$REPO_BCB" "scripts/e2e/agencies-bootstrap.ts"
-    ( cd "$REPO_BCB" && \
-      DATABASE_URL="$BCB_DB_URL" NODE_ENV=development AWS_REGION=us-west-2 PORT="$PORT_BCB_AGENCIES" \
-      E2E_PUBLIC_KEY_PATH="$(key_path "$LEG_BCB-public.pem")" \
-      ADAPTER_BCB_URL="http://localhost:$PORT_ADAPTER_BCB/bcb" \
-      start_bg bcb-agencies "$LOG_DIR/bcb-agencies.log" \
-        pnpm exec ts-node -r tsconfig-paths/register scripts/e2e/agencies-bootstrap.ts )
+    warn "app agencies ya estaba arriba — se reinicia para correr el código actual"
   fi
+  stop_bg bcb-agencies
+  ensure_port_free "$PORT_BCB_AGENCIES" "app agencies"
+  graft "$E2E_ROOT/lib/bcb-agencies-bootstrap.ts" "$REPO_BCB" "scripts/e2e/agencies-bootstrap.ts"
+  ( cd "$REPO_BCB" && \
+    DATABASE_URL="$BCB_DB_URL" NODE_ENV=development AWS_REGION=us-west-2 PORT="$PORT_BCB_AGENCIES" \
+    E2E_PUBLIC_KEY_PATH="$(key_path "$LEG_BCB-public.pem")" \
+    ADAPTER_BCB_URL="http://localhost:$PORT_ADAPTER_BCB/bcb" \
+    start_bg bcb-agencies "$LOG_DIR/bcb-agencies.log" \
+      pnpm exec ts-node -r tsconfig-paths/register scripts/e2e/agencies-bootstrap.ts )
 
   # adapter-bcb: compartido con los otros flujos, pero ESTE necesita que apunten sus módulos
   # bcb-auth y agencies a los apps locales (por defecto van al API Gateway de develop). Se
