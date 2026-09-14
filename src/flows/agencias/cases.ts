@@ -779,4 +779,39 @@ export const cases: CaseDef[] = [
       );
     },
   },
+  {
+    name: 'a36-desactivar-corta-la-sesion',
+    label: 'AD05: desactivar la agencia corta el acceso en el momento, no cuando expire el token',
+    run: async (t) => {
+      const s = await loginOk();
+      const antes = await satGet('/auth/me', s.accessToken);
+      t.is('la agencia entra con su token', 200, antes.status, antes.text.slice(0, 200));
+
+      // Apagar el interruptor desde el portal, por la cadena real.
+      const apagar = await adminPatch(`/agencies/${AGENCIA.id}/status`, { status: 'INACTIVE' });
+      t.is('status del cambio', 200, apagar.status, apagar.text.slice(0, 300));
+      t.is('la agencia queda inactiva', 'INACTIVE', apagar.body?.status);
+
+      try {
+        // BCB borra la sesión: el refresh muere aunque el token siga sin expirar.
+        t.is('BCB se quedó sin sesiones vivas', 0, (await sessions()).length);
+
+        const renovar = await refresh(s.refreshToken);
+        t.is('el refresh ya no sirve', 401, renovar.status, renovar.text.slice(0, 200));
+
+        // Y el access token que la agencia tiene en la mano deja de abrir.
+        const despues = await satGet('/auth/me', s.accessToken);
+        t.is('el access token deja de abrir', 403, despues.status, despues.text.slice(0, 200));
+
+        const propio = await satGet(`/agencies/${AGENCIA.id}`, s.accessToken);
+        t.is('tampoco sus propios datos', 403, propio.status, propio.text.slice(0, 200));
+      } finally {
+        const prender = await adminPatch(`/agencies/${AGENCIA.id}/status`, { status: 'ACTIVE' });
+        t.is('se vuelve a activar', 200, prender.status, prender.text.slice(0, 200));
+      }
+
+      const otra = await login();
+      t.is('y puede volver a entrar', 200, otra.status, otra.text.slice(0, 200));
+    },
+  },
 ];
