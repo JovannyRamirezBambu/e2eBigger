@@ -111,11 +111,11 @@ async function dbSnapshot(): Promise<Record<string, unknown>[]> {
     include: { rfcs: { where: { isPrimary: true } }, sessions: true },
   });
   if (!agency) return [];
-  const copia = satSql(`SELECT "nombreComercial" || ' · ' || status FROM "Agencia" WHERE id='${AGENCIA.id}';`);
+  const copia = satSql(`SELECT "name" || ' · ' || status FROM "Agency" WHERE id='${AGENCIA.id}';`);
   return [
     {
-      agencia: agency.name,
-      usuario: agency.rfcs[0]?.username ?? null,
+      agency: agency.name,
+      username: agency.rfcs[0]?.username ?? null,
       correo_login: agency.rfcs[0]?.email ?? null,
       status_bcb: agency.status,
       // AD11: la contraseña es de la sucursal, no de la agencia.
