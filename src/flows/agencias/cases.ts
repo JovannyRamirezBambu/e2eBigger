@@ -55,6 +55,9 @@ type LoginBody = {
     id: string;
     nombreComercial: string;
     email: string;
+    /** Sucursal con la que se entró: desde AD02/AD11 las credenciales son suyas. */
+    sucursalId: string;
+    usuario: string;
     status: string;
     esContrasenaTemporal: boolean;
     creditLimit: number;

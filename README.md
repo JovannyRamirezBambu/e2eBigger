@@ -47,9 +47,11 @@ Lo que gana TypeScript en la capa de pruebas, concretamente:
 | `./e2e verify <flujo>` | Imprime el estado en BD, formateado para leerlo a ojo. |
 | `./e2e status <flujo>` | Qué está arriba y qué no. |
 | `./e2e psql <flujo>` | `psql` en la BD principal del flujo. |
+| `./e2e token <flujo> [segundos]` | Token de administración para pegarle a mano al satélite. Solo lo emiten los flujos que lo necesitan (hoy `agencias`). |
 | `./e2e logs <flujo> [srv]` | `tail -f` de un servicio. |
 | `./e2e down <flujo>` | Baja los servicios del flujo. `--all` baja también la infra compartida. |
 | `./e2e demo` | Panel de **demostración** de Venta a Bordo, para presentar los 3 servicios del contrato TI-FT-45 a cliente y proveedor. Ver [`demo/README.md`](demo/README.md). |
+| `./e2e demo tomtom` | Panel de **demostración** de TomTom: el ciclo de una corrida entre BCB e InRoute (Adsum). Ver [`demo-tomtom/README.md`](demo-tomtom/README.md). |
 | `./e2e list` | Flujos disponibles. |
 
 Correr un caso suelto mientras depurás:
@@ -58,14 +60,21 @@ Correr un caso suelto mientras depurás:
 ./e2e test tomtom t11-carrera-manual
 ```
 
-## Dos paneles, para dos cosas distintas
+## Paneles, para dos cosas distintas
 
 `./e2e ui <flujo>` (`:7777`) es el **panel de diagnóstico**: estado de la cadena y
-botones para correr los casos. `./e2e demo` (`:7788`) es el **panel de
-demostración** de Venta a Bordo, pensado para explicarle los 3 servicios del
-contrato TI-FT-45 a gente de fuera del equipo —diagramas, datos editables, y el SQL
-de validación a la vista— y para poder despachar de verdad contra el SmartMac real
-de TECNITRANS sin reiniciar nada. Está documentado en [`demo/README.md`](demo/README.md).
+botones para correr los casos.
+
+Los **paneles de demostración** son otra cosa: están pensados para explicarle el
+flujo a gente de fuera del equipo —diagramas, datos editables y el SQL de
+validación a la vista— y para poder ejercer de verdad al proveedor sin reiniciar
+nada. Hay uno por integración, porque el guion de la reunión y las validaciones no
+se parecen:
+
+| Panel | Puerto | De qué habla |
+|---|---|---|
+| `./e2e demo` | `:7788` | Venta a Bordo: los 3 servicios del contrato TI-FT-45, con SmartMac simulado o el real de TECNITRANS. [`demo/README.md`](demo/README.md) |
+| `./e2e demo tomtom` | `:7789` | TomTom: el ciclo de una corrida entre BCB e InRoute, con InRoute simulado o el real de Adsum. [`demo-tomtom/README.md`](demo-tomtom/README.md) |
 
 ## El panel
 
@@ -179,11 +188,19 @@ Cadena completa: **satélite TomTom → adapter-tomtom → NATS JetStream → ad
 
 | Componente | Repo | Puerto |
 |---|---|---|
-| Satélite TomTom (su código de firma JWT) | `BIGER_EstrellaRoja_TomTom` | BD `:5440` |
-| `adapter-tomtom` | `BIGER_EstrellaRoja_Main` | `:8088` |
+| Satélite TomTom | `BIGER_EstrellaRoja_TomTom` | `:3003`, BD `:5440` |
+| `adapter-tomtom` | `BIGER_EstrellaRoja_Main` | `:8090` (`:8088` lo reserva ventaabordo) |
 | NATS ×3 + `adapter-invoice` + Postgres | `BIGER_EstrellaRoja_Main` | `:4222` / `:8222` / `:5433` |
 | `adapter-bcb` | `BIGER_EstrellaRoja_Main` | `:8085` |
 | `apps/bcb` | `BCB_EstrellaRoja_Backend` | `:3009`, BD `:5436` |
+| InRoute falso | el panel de demostración | `:7803` |
+
+Las pruebas ejercitan CU04/CU05 invocando el cliente de callbacks del satélite
+directamente, así que no necesitan que el satélite corra como proceso ni que
+InRoute exista. El **ciclo completo** —alta del viaje en InRoute, polling de
+geocercas, telemetría— sí lo necesita, y por eso `up` levanta el satélite en
+`:3003` con `INROUTE_BASE_URL` apuntando al InRoute falso del panel: ver
+[`demo-tomtom/README.md`](demo-tomtom/README.md).
 
 33 casos: autenticación, T1 (contexto), T10 (despacho), T11 (llegada),
 idempotencia, precondiciones de estado, validación de DTOs, dos recorridos de
@@ -230,6 +247,41 @@ al adapter validando contra la llave vieja y daría un 401 inexplicable.
 una rama. El caso `t09` **espeja el DTO del adapter** en vez de fijar un
 comportamiento: afirma lo que el repo dice que hace, y se pone en rojo justo en el
 caso que importa — que el adapter lo mande y BCB lo ignore.
+
+### `agencias` — login de agencias del Portal de Agencias
+
+Cadena completa: **satélite Portal de Agencias → adapter-portalagencias → NATS
+request/reply → adapter-bcb → `apps/auth` (`/agency/*`)**.
+
+| Componente | Repo | Puerto |
+|---|---|---|
+| Satélite Portal de Agencias | `BIGER_EstrellaRoja_PortalAgenciasAdmin` | `:3002`, BD `:5434` |
+| `adapter-portalagencias` (jar en el host) | `BIGER_EstrellaRoja_Main` | `:8094` |
+| NATS ×3 + `adapter-invoice` + Postgres | `BIGER_EstrellaRoja_Main` | `:4222` / `:8222` / `:5433` |
+| `adapter-bcb` (con `BCB_AUTH_SATELLITE_URL` local) | `BIGER_EstrellaRoja_Main` | `:8085` |
+| `apps/auth` (login de agencias) | `BCB_EstrellaRoja_Backend` | `:3012`, BD `:5436` |
+| Emisor JWKS de prueba (rol `agency`) | `e2e/lib/jwks-server.js` | `:7804` |
+
+16 casos: login correcto (tokens, claims, una sesión en BD), contraseña incorrecta y
+correo inexistente (401), agencia inactiva (403 al entrar y con token válido),
+`/auth/me` en el satélite y en BCB, refresh token como Bearer (401), deny-by-default
+de `@AgencyAccess()` (endpoint admin → 403, detalle ajeno → 403, propio → 200),
+refresh que rota el access token, logout que revoca, dos logins concurrentes que
+dejan UNA sesión, rutas públicas del adapter (`/agencies/auth/*` sin token → 200,
+el resto → 401) y payload inválido → 400.
+
+**No hay seed versionado.** La agencia de prueba se da de alta ejecutando los
+mismos SQL manuales que se corren en develop (`ER/_portal-agencias-docs/`), así que
+el harness también los prueba. `apps/auth` arranca con `lib/bcb-auth-bootstrap.ts`:
+sustituye solo `SecretManagerService` (devuelve la privada del leg `bcb-agency`) y
+el JWKS que BCB consulta para verificar lo sirve `lib/jwks-server.js` con la
+pública del mismo par. Ningún eslabón corre con `JWT_BYPASS`: en el adapter lo que
+se prueba es justamente que `app.security.public-paths` abre solo las tres rutas de
+auth.
+
+`adapter-bcb` se reinicia siempre en `up`: necesita `BCB_AUTH_SATELLITE_URL`
+apuntando al `apps/auth` local (por defecto va al API Gateway de develop), y otro
+flujo pudo haberlo dejado arriba sin esa variable.
 
 ## Agregar un flujo
 

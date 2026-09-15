@@ -91,6 +91,16 @@ async function main(): Promise<number> {
         console.log(JSON.stringify(await flow.probe()));
         return 0;
 
+      case 'token': {
+        if (!flow.adminToken) {
+          console.error(`el flujo '${flowName}' no emite tokens de administración`);
+          return 1;
+        }
+        // Solo el token en stdout: así se puede canalizar directo a curl o a Bruno.
+        console.log(flow.adminToken(arg ? Number(arg) : undefined));
+        return 0;
+      }
+
       case 'db-json':
         console.log(JSON.stringify(await flow.dbSnapshot()));
         return 0;

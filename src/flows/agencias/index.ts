@@ -4,6 +4,7 @@ import { logFile } from '@harness/paths';
 import type { Flow, Probe } from '@harness/types';
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
+import { adminToken } from './admin-token';
 import { cases } from './cases';
 import { AGENCIA, PORTS, SAT_DB } from './scenarios';
 import { seed } from './seed';
@@ -133,5 +134,8 @@ export const flow: Flow = {
   seed,
   probe,
   dbSnapshot,
+  // `./e2e token agencias` — para Bruno, curl o el navegador. Firma con la privada
+  // del leg `adapter-pa` de run/keys/, la misma que usan los casos.
+  adminToken: (expiraEn) => adminToken({ expiraEn }),
   close: closeDb,
 };

@@ -25,8 +25,9 @@ Comandos:
   test <flujo> [caso]    Corre los casos; sin argumento corre todos
   verify <flujo>         Imprime el estado en BD para revisarlo a ojo
   ui <flujo>             Abre el panel en el navegador (diagrama + botones)
-  demo                   Panel de DEMOSTRACIÓN de Venta a Bordo, para presentar
-                         los 3 servicios del contrato TI-FT-45 a cliente/proveedor
+  demo [flujo]           Panel de DEMOSTRACIÓN, para presentar el flujo a
+                         cliente/proveedor. Sin flujo: Venta a Bordo (:7788).
+                         `demo tomtom`: el ciclo BCB ↔ InRoute (:7789)
   down <flujo>           Detiene los servicios de este flujo
   status <flujo>         Qué está arriba y qué no
   psql <flujo>           Abre psql en la BD principal del flujo
@@ -95,8 +96,16 @@ case "$cmd" in
   help|-h|--help) usage; exit 0 ;;
   list)           list_flows; exit 0 ;;
   flows)          flows_tsv;  exit 0 ;;   # legible por máquina, para el panel
-  # El panel de demostración es de Venta a Bordo y de nadie más: no lleva flujo.
-  demo)           need_cmd node; exec node "$E2E_ROOT/demo/server.cjs" ;;
+  # Cada panel de demostración es su propio programa: el guion de la reunión, los
+  # actores del diagrama y las validaciones en base no se parametrizan bien.
+  demo)
+    need_cmd node
+    case "${2:-ventaabordo}" in
+      ventaabordo) exec node "$E2E_ROOT/demo/server.cjs" ;;
+      tomtom)      exec node "$E2E_ROOT/demo-tomtom/server.cjs" ;;
+      *) err "no hay panel de demostración para '${2}'"; exit 1 ;;
+    esac
+    ;;
 esac
 
 flow="${2:-}"
@@ -120,6 +129,9 @@ case "$cmd" in
   verify) ts verify ;;
   cases)  ts cases ;;
   probe)  ts probe ;;
+  # Token de administración para pegarle a mano al satélite (Bruno, curl, navegador).
+  # Solo stdout, para poder canalizarlo: ./e2e token agencias | pbcopy
+  token)  ts token "$@" ;;
   db-json) ts db-json ;;
   dlq)    ts dlq "$@" ;;
   traffic) ts traffic ;;
