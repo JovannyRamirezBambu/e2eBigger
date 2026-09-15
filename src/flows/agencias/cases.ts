@@ -467,10 +467,17 @@ export const cases: CaseDef[] = [
       // el valor de vuelta y no solo el status.
       t.is('tipos de pasajero configurados', 1, r.body?.tiposPasajero?.length);
       t.is('tipo de pasajero correcto', tipoId, r.body?.tiposPasajero?.[0]?.id);
-      t.is(
-        'servicios aplicados a la sucursal',
-        servicioId,
-        r.body?.sucursales?.[0]?.servicios?.[0]?.id,
+      // AD09: los tipos de servicio son de la AGENCIA, no de cada sucursal.
+      t.is('servicios de la agencia', 1, r.body?.servicios?.length);
+      t.is('servicio correcto', servicioId, r.body?.servicios?.[0]?.id);
+      // El portal pinta el nombre completo ("Primera clase"), no la abreviatura.
+      t.present(
+        'el servicio trae su nombre completo',
+        r.body?.servicios?.[0]?.nombreCompleto,
+      );
+      t.assert(
+        'y las sucursales ya no los traen',
+        !('servicios' in (r.body?.sucursales?.[0] ?? {})),
       );
 
       // Se restaura el estado sembrado: otros casos verifican el 10 % y los 50 000.
@@ -812,6 +819,112 @@ export const cases: CaseDef[] = [
 
       const otra = await login();
       t.is('y puede volver a entrar', 200, otra.status, otra.text.slice(0, 200));
+    },
+  },
+  {
+    name: 'a37-credenciales-por-sucursal',
+    label: 'AD02/AD11: cada sucursal tiene su usuario y su contraseña, independientes entre sí',
+    run: async (t) => {
+      const sello = Date.now();
+      const alta = await adminPost('/agencies', {
+        nombreComercial: `Agencia Credenciales ${sello}`,
+        sucursales: [
+          {
+            rfc: rfcUnico('CRA'),
+            razonSocial: 'Credenciales Uno S.A. de C.V.',
+            usuario: `matriz.${sello}`,
+            email: `matriz.${sello}@example.com`,
+            telefono: '5512340001',
+            direccion: 'Av. Uno 1, CDMX',
+            ciudad: 'Ciudad de México',
+            esPrincipal: true,
+          },
+          {
+            rfc: rfcUnico('CRB'),
+            razonSocial: 'Credenciales Dos S.A. de C.V.',
+            usuario: `sucursal.${sello}`,
+            email: `sucursal.${sello}@example.com`,
+            telefono: '2229990002',
+            direccion: 'Blvd. Dos 2, Puebla',
+            ciudad: 'Puebla',
+            esPrincipal: false,
+          },
+        ],
+      });
+      t.is('status', 201, alta.status, alta.text.slice(0, 400));
+
+      const agenciaId: string = alta.body?.id;
+      const sucursales = (alta.body?.sucursales ?? []) as {
+        id: string;
+        usuario: string;
+        email: string;
+      }[];
+      t.is('nacen las dos sucursales', 2, sucursales.length);
+      t.is(
+        'cada una conserva su nombre de usuario',
+        `matriz.${sello},sucursal.${sello}`,
+        sucursales
+          .map((x) => x.usuario)
+          .sort()
+          .join(','),
+      );
+
+      try {
+        // BCB genera una contraseña DISTINTA por sucursal, así que se leen de la base:
+        // por diseño no salen en la respuesta, solo viajan por correo.
+        const db = bcbDb();
+        const filas = await db.agencyRfc.findMany({
+          where: { agencyId: agenciaId },
+          select: { id: true, username: true, passwordHash: true },
+        });
+        t.assert(
+          'cada sucursal guarda su propio hash',
+          new Set(filas.map((f) => f.passwordHash)).size === 2,
+        );
+
+        // Se fija una contraseña conocida por sucursal para poder entrar con cada una.
+        const hash =
+          '$2b$12$HDNcRuUcQ0o3P.sij7.JP.nzxqpQS28h5WQrUuXXFoP4wmL2r6Cia';
+        await db.agencyRfc.updateMany({
+          where: { agencyId: agenciaId },
+          data: { passwordHash: hash, isTempPassword: true },
+        });
+
+        const conCorreo = await login(`matriz.${sello}@example.com`, 'AgenciaDemo2026!');
+        t.is('entra con el correo', 200, conCorreo.status, conCorreo.text.slice(0, 200));
+
+        // El DCU llama credenciales a "Usuario y Contraseña": el nombre de usuario
+        // también abre, porque es único en toda la tabla.
+        const conUsuario = await login(`sucursal.${sello}`, 'AgenciaDemo2026!');
+        t.is('y también con el nombre de usuario', 200, conUsuario.status, conUsuario.text.slice(0, 200));
+        t.is(
+          'el perfil dice con qué sucursal entró',
+          `sucursal.${sello}`,
+          conUsuario.body?.agencia?.usuario,
+        );
+
+        // Las dos sesiones conviven: antes la sesión era una por agencia y la segunda
+        // entrada echaba a la primera.
+        const vivas = await db.agencySession.count({
+          where: { agencyId: agenciaId },
+        });
+        t.is('las dos sesiones conviven', 2, vivas);
+
+        // Cambiar la contraseña de una NO toca la de la otra.
+        const cambio = await http('POST', `${SAT_URL}/auth/change-password`, {
+          token: conCorreo.body.accessToken,
+          body: { contrasenaActual: 'AgenciaDemo2026!', contrasenaNueva: 'OtraClave2026!' },
+        });
+        t.is('cambia su contraseña', 204, cambio.status, cambio.text.slice(0, 200));
+
+        const otraSigue = await login(`sucursal.${sello}`, 'AgenciaDemo2026!');
+        t.is('la otra sucursal conserva la suya', 200, otraSigue.status, otraSigue.text.slice(0, 200));
+
+        const yaNo = await login(`matriz.${sello}@example.com`, 'AgenciaDemo2026!');
+        t.is('y la que cambió ya no entra con la anterior', 401, yaNo.status);
+      } finally {
+        await adminDelete(`/agencies/${agenciaId}`);
+      }
     },
   },
 ];

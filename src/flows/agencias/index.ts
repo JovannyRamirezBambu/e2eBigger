@@ -114,9 +114,11 @@ async function dbSnapshot(): Promise<Record<string, unknown>[]> {
   return [
     {
       agencia: agency.name,
+      usuario: agency.rfcs[0]?.username ?? null,
       correo_login: agency.rfcs[0]?.email ?? null,
       status_bcb: agency.status,
-      contrasena_temporal: agency.isTempPassword,
+      // AD11: la contraseña es de la sucursal, no de la agencia.
+      contrasena_temporal: agency.rfcs[0]?.isTempPassword ?? null,
       sesiones_vivas: agency.sessions.length,
       access_expira: agency.sessions[0]?.accessTokenExpiresAt?.toISOString() ?? null,
       copia_satelite: copia || '(no existe)',

@@ -95,9 +95,9 @@ flow_up() {
   ( cd "$REPO_BCB" && pnpm exec prisma generate >/dev/null 2>&1 ) || die "prisma generate (BCB) falló"
   ok "esquema al día ($(bcb_sql "SELECT count(*) FROM _prisma_migrations;") migraciones) y client regenerado"
   local uniq
-  uniq=$(bcb_sql "SELECT count(*) FROM pg_indexes WHERE tablename='AgencySession' AND indexname='AgencySession_agencyId_key';")
-  [ "$uniq" = "1" ] || die "falta el índice único AgencySession_agencyId_key: ¿la rama de BCB es feat/agency-portal-login?"
-  ok "AgencySession.agencyId es único (una sesión viva por agencia)"
+  uniq=$(bcb_sql "SELECT count(*) FROM pg_indexes WHERE tablename='AgencySession' AND indexname='AgencySession_agencyRfcId_key';")
+  [ "$uniq" = "1" ] || die "falta el índice único AgencySession_agencyRfcId_key: ¿la rama de BCB trae la migración de credenciales por sucursal?"
+  ok "AgencySession.agencyRfcId es único (una sesión viva por sucursal)"
   if [ "$(bcb_sql "SELECT count(*) FROM \"State\";")" = "0" ]; then
     ( cd "$REPO_BCB" && DATABASE_URL="$BCB_DB_URL" pnpm prisma:local:db:seed >/dev/null 2>&1 ) \
       || die "el seed oficial de catálogos de BCB falló"
