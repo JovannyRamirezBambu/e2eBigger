@@ -254,7 +254,7 @@ PY
       NATS_NKEY_SECRET=nats-nkey-portalagencias NATS_NKEY_SECRET_KEY_VALUE="{\"seed\":\"$seed_pa\"}" \
       SPRING_DATASOURCE_URL="$BIGER_DB_URL" \
       JWT_BYPASS=false JWT_PUBLIC_KEY="$(pem_escaped "$(key_path "$LEG_SAT_IN-public.pem")")" \
-      SATELLITE_PORTALAGENCIAS_URL="http://localhost:$PORT_SAT" \
+      SATELLITE_PORTALAGENCIAS_URL="http://localhost:$PORT_SAT/portal-agencias" \
       PORTALAGENCIAS_AUTH_PRIVATE_KEY_SECRET=portalagencias-jwt-local \
       PORTALAGENCIAS_AUTH_PRIVATE_KEY_SECRET_KEY_VALUE="$pa_priv_json" \
       PORTALAGENCIAS_AUTH_SUBJECT=adapter-portalagencias \

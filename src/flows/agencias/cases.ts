@@ -936,22 +936,19 @@ export const cases: CaseDef[] = [
     run: async (t) => {
       const db = bcbDb();
       const sello = Date.now();
-      const salida = new Date('2026-06-15T11:00:00.000Z');
 
       // Cadena mínima para que exista un cargo: un viaje ya sembrado, un asiento, una
       // orden y su boleto. El cargo exige orderItemId, no se puede inventar suelto.
-      const trip = await db.trip.findFirst({ select: { id: true } });
+      // Se usa la salida que el viaje YA tiene, sin tocarla: Trip tiene único
+      // (routeId, departure) y forzarle una fecha fija choca con otro viaje de la ruta.
+      const trip = await db.trip.findFirst({ select: { id: true, departure: true } });
       if (!trip) throw new Error('no hay Trip sembrado en BCB');
+      const salida = trip.departure;
 
       const creados: string[] = [];
       const importes: [number, number] = [250.5, 749.5];
 
       try {
-        await db.trip.update({
-          where: { id: trip.id },
-          data: { departure: salida },
-        });
-
         for (const [i, importe] of importes.entries()) {
           const seat = await db.tripSeat.create({
             data: { number: 900 + i, tripId: trip.id },
