@@ -930,4 +930,93 @@ export const cases: CaseDef[] = [
       }
     },
   },
+  {
+    name: 'a38-ventas-fecha-de-corrida-y-total',
+    label: 'AD08: el reporte trae la FECHA DE CORRIDA y el total de todo lo filtrado, no el de la página',
+    run: async (t) => {
+      const db = bcbDb();
+      const sello = Date.now();
+      const salida = new Date('2026-06-15T11:00:00.000Z');
+
+      // Cadena mínima para que exista un cargo: un viaje ya sembrado, un asiento, una
+      // orden y su boleto. El cargo exige orderItemId, no se puede inventar suelto.
+      const trip = await db.trip.findFirst({ select: { id: true } });
+      if (!trip) throw new Error('no hay Trip sembrado en BCB');
+
+      const creados: string[] = [];
+      const importes: [number, number] = [250.5, 749.5];
+
+      try {
+        await db.trip.update({
+          where: { id: trip.id },
+          data: { departure: salida },
+        });
+
+        for (const [i, importe] of importes.entries()) {
+          const seat = await db.tripSeat.create({
+            data: { number: 900 + i, tripId: trip.id },
+            select: { id: true },
+          });
+          const order = await db.order.create({
+            data: {
+              type: 'ONE_WAY',
+              subtotal: importe,
+              total: importe,
+            },
+            select: { id: true },
+          });
+          const item = await db.orderItem.create({
+            data: {
+              ticketNumber: `E2E-${sello}-${i}`,
+              basePrice: importe,
+              totalPrice: importe,
+              orderId: order.id,
+              tripSeatId: seat.id,
+            },
+            select: { id: true },
+          });
+          const cargo = await db.agencyCharge.create({
+            data: {
+              amount: importe,
+              agencyId: AGENCIA.id,
+              orderItemId: item.id,
+            },
+            select: { id: true },
+          });
+          creados.push(cargo.id);
+        }
+
+        // limit=1 a propósito: el total NO puede ser el de la página.
+        const r = await adminGet(`/agencies/${AGENCIA.id}/ventas?page=1&limit=1`);
+        t.is('status', 200, r.status, r.text.slice(0, 300));
+        t.is('la página trae una sola fila', 1, r.body?.data?.length);
+        t.is('pero el total cuenta las dos', 2, r.body?.paginacion?.totalRegistros);
+        t.is('el importe total es de todo lo filtrado', 1000, r.body?.importeTotal);
+
+        t.is(
+          'la fila trae la fecha de CORRIDA',
+          salida.toISOString(),
+          r.body?.data?.[0]?.fechaCorrida,
+        );
+        // Y no es la de venta: son dos fechas distintas y la tabla pinta la de salida.
+        t.assert(
+          'que no es la fecha de venta',
+          r.body?.data?.[0]?.fechaCorrida !== r.body?.data?.[0]?.fechaHoraVenta,
+        );
+
+        // El filtro por fecha acota el total, no solo la página.
+        const vacio = await adminGet(
+          `/agencies/${AGENCIA.id}/ventas?page=1&limit=20&from=2020-01-01&to=2020-12-31`,
+        );
+        t.is('sin cargos en el rango', 0, vacio.body?.data?.length);
+        t.is('el total del rango vacío es 0', 0, vacio.body?.importeTotal);
+      } finally {
+        await db.agencyCharge.deleteMany({ where: { id: { in: creados } } });
+        await db.orderItem.deleteMany({
+          where: { ticketNumber: { startsWith: `E2E-${sello}-` } },
+        });
+        await db.tripSeat.deleteMany({ where: { number: { in: [900, 901] } } });
+      }
+    },
+  },
 ];
