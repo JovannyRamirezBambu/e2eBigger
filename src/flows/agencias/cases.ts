@@ -467,10 +467,17 @@ export const cases: CaseDef[] = [
       // el valor de vuelta y no solo el status.
       t.is('tipos de pasajero configurados', 1, r.body?.tiposPasajero?.length);
       t.is('tipo de pasajero correcto', tipoId, r.body?.tiposPasajero?.[0]?.id);
-      t.is(
-        'servicios aplicados a la sucursal',
-        servicioId,
-        r.body?.sucursales?.[0]?.servicios?.[0]?.id,
+      // AD09: los tipos de servicio son de la AGENCIA, no de cada sucursal.
+      t.is('servicios de la agencia', 1, r.body?.servicios?.length);
+      t.is('servicio correcto', servicioId, r.body?.servicios?.[0]?.id);
+      // El portal pinta el nombre completo ("Primera clase"), no la abreviatura.
+      t.present(
+        'el servicio trae su nombre completo',
+        r.body?.servicios?.[0]?.nombreCompleto,
+      );
+      t.assert(
+        'y las sucursales ya no los traen',
+        !('servicios' in (r.body?.sucursales?.[0] ?? {})),
       );
 
       // Se restaura el estado sembrado: otros casos verifican el 10 % y los 50 000.
@@ -621,14 +628,18 @@ export const cases: CaseDef[] = [
       const email = `nueva.${Date.now()}@example.com`;
       const r = await adminPost('/agencies', {
         nombreComercial: 'Agencia Nueva E2E',
-        razonSocial: 'Agencia Nueva E2E SA de CV',
-        rfc,
-        email,
-        telefono: '2223334455',
-        direccion: 'Av. Nueva 1',
-        ciudad: 'Atlixco',
         creditLimit: 10000,
         porcentajeDescuento: 5,
+        sucursales: [
+          {
+            rfc,
+            razonSocial: 'Agencia Nueva E2E SA de CV',
+            email,
+            telefono: '2223334455',
+            direccion: 'Av. Nueva 1',
+            ciudad: 'Atlixco',
+          },
+        ],
       });
 
       t.is('status', 201, r.status, r.text.slice(0, 300));
@@ -676,6 +687,244 @@ export const cases: CaseDef[] = [
       t.is('se restaura la contraseña sembrada', 204, revertir.status, revertir.text.slice(0, 200));
       const final = await login();
       t.is('el login original vuelve a funcionar', 200, final.status);
+    },
+  },
+  {
+    name: 'a34-alta-agencia-varios-rfc',
+    label: 'AD02: alta de agencia con dos RFC de una vez, como pide el diseño',
+    run: async (t) => {
+      const sello = Date.now();
+      const rfcUno = rfcUnico('SLO');
+      const rfcDos = rfcUnico('DFN');
+      const correoUno = `operaciones.${sello}@example.com`;
+      const correoDos = `frias.${sello}@example.com`;
+
+      const r = await adminPost('/agencies', {
+        nombreComercial: 'Soluciones Logísticas del Occidente',
+        creditLimit: 80000,
+        porcentajeDescuento: 12,
+        sucursales: [
+          {
+            rfc: rfcUno,
+            razonSocial: 'Soluciones Logísticas del Occidente S.A. de C.V.',
+            email: correoUno,
+            telefono: '3341237788',
+            direccion: 'C. Eligio Ancona 145, CDMX',
+            ciudad: 'Ciudad de México',
+            esPrincipal: true,
+          },
+          {
+            rfc: rfcDos,
+            razonSocial: 'Distribuciones Frías del Occidente',
+            email: correoDos,
+            telefono: '3341237788',
+            direccion: 'C. Eligio Ancona 145, CDMX',
+            ciudad: 'Ciudad de México',
+          },
+        ],
+      });
+
+      t.is('status', 201, r.status, r.text.slice(0, 300));
+      t.is('nace con las dos sucursales', 2, r.body?.totalSucursales);
+
+      const porRfc = Object.fromEntries(
+        (r.body?.sucursales ?? []).map((s: any) => [s.rfc, s]),
+      );
+      // Cada RFC conserva lo suyo: es justo lo que se perdía cuando los DTO de
+      // relay solo declaraban `rfc` e `isPrimary`.
+      t.is('la primera conserva su correo', correoUno, porRfc[rfcUno]?.email);
+      t.is(
+        'la segunda conserva su razón social',
+        'Distribuciones Frías del Occidente',
+        porRfc[rfcDos]?.razonSocial,
+      );
+      t.is(
+        'exactamente una es la principal',
+        1,
+        (r.body?.sucursales ?? []).filter((s: any) => s.esPrincipal).length,
+      );
+      t.is('y es la marcada', true, porRfc[rfcUno]?.esPrincipal);
+      t.is(
+        'los datos de contacto de la agencia salen de la principal',
+        correoUno,
+        r.body?.email,
+      );
+
+      // Las dos pueden iniciar sesión: el correo de cualquiera es identificador.
+      const listado = await adminGet(`/agencies/${r.body?.id}/sucursales`);
+      t.is('ambas quedan vivas', 2, listado.body?.data?.length);
+
+      const borrado = await adminDelete(`/agencies/${r.body?.id}`);
+      t.is('se elimina con sus dos sucursales', 204, borrado.status, borrado.text.slice(0, 200));
+    },
+  },
+  {
+    name: 'a35-sin-limite-de-credito',
+    label: 'AD09: la casilla "Sin límite de crédito" deja el tope en null y no bloquea la venta',
+    run: async (t) => {
+      const sinTope = await adminPut(`/agencies/${AGENCIA.id}`, {
+        sinLimiteCredito: true,
+      });
+      t.is('status', 200, sinTope.status, sinTope.text.slice(0, 300));
+      t.is('creditLimit queda en null', null, sinTope.body?.creditLimit);
+      // Sin tope no hay disponible que calcular.
+      t.is('saldoDisponible también', null, sinTope.body?.saldoDisponible);
+
+      // La copia local del satélite refleja el null, no un 0.
+      const detalle = await adminGet(`/agencies/${AGENCIA.id}`);
+      t.is('el detalle lo confirma', null, detalle.body?.creditLimit);
+
+      const conTope = await adminPut(`/agencies/${AGENCIA.id}`, {
+        creditLimit: 50000,
+        sinLimiteCredito: false,
+      });
+      t.is('vuelve a tener tope', 50000, conTope.body?.creditLimit);
+      t.is(
+        'y el disponible se vuelve a calcular',
+        50000 - (conTope.body?.currentDebt ?? 0),
+        conTope.body?.saldoDisponible,
+      );
+    },
+  },
+  {
+    name: 'a36-desactivar-corta-la-sesion',
+    label: 'AD05: desactivar la agencia corta el acceso en el momento, no cuando expire el token',
+    run: async (t) => {
+      const s = await loginOk();
+      const antes = await satGet('/auth/me', s.accessToken);
+      t.is('la agencia entra con su token', 200, antes.status, antes.text.slice(0, 200));
+
+      // Apagar el interruptor desde el portal, por la cadena real.
+      const apagar = await adminPatch(`/agencies/${AGENCIA.id}/status`, { status: 'INACTIVE' });
+      t.is('status del cambio', 200, apagar.status, apagar.text.slice(0, 300));
+      t.is('la agencia queda inactiva', 'INACTIVE', apagar.body?.status);
+
+      try {
+        // BCB borra la sesión: el refresh muere aunque el token siga sin expirar.
+        t.is('BCB se quedó sin sesiones vivas', 0, (await sessions()).length);
+
+        const renovar = await refresh(s.refreshToken);
+        t.is('el refresh ya no sirve', 401, renovar.status, renovar.text.slice(0, 200));
+
+        // Y el access token que la agencia tiene en la mano deja de abrir.
+        const despues = await satGet('/auth/me', s.accessToken);
+        t.is('el access token deja de abrir', 403, despues.status, despues.text.slice(0, 200));
+
+        const propio = await satGet(`/agencies/${AGENCIA.id}`, s.accessToken);
+        t.is('tampoco sus propios datos', 403, propio.status, propio.text.slice(0, 200));
+      } finally {
+        const prender = await adminPatch(`/agencies/${AGENCIA.id}/status`, { status: 'ACTIVE' });
+        t.is('se vuelve a activar', 200, prender.status, prender.text.slice(0, 200));
+      }
+
+      const otra = await login();
+      t.is('y puede volver a entrar', 200, otra.status, otra.text.slice(0, 200));
+    },
+  },
+  {
+    name: 'a37-credenciales-por-sucursal',
+    label: 'AD02/AD11: cada sucursal tiene su usuario y su contraseña, independientes entre sí',
+    run: async (t) => {
+      const sello = Date.now();
+      const alta = await adminPost('/agencies', {
+        nombreComercial: `Agencia Credenciales ${sello}`,
+        sucursales: [
+          {
+            rfc: rfcUnico('CRA'),
+            razonSocial: 'Credenciales Uno S.A. de C.V.',
+            usuario: `matriz.${sello}`,
+            email: `matriz.${sello}@example.com`,
+            telefono: '5512340001',
+            direccion: 'Av. Uno 1, CDMX',
+            ciudad: 'Ciudad de México',
+            esPrincipal: true,
+          },
+          {
+            rfc: rfcUnico('CRB'),
+            razonSocial: 'Credenciales Dos S.A. de C.V.',
+            usuario: `sucursal.${sello}`,
+            email: `sucursal.${sello}@example.com`,
+            telefono: '2229990002',
+            direccion: 'Blvd. Dos 2, Puebla',
+            ciudad: 'Puebla',
+            esPrincipal: false,
+          },
+        ],
+      });
+      t.is('status', 201, alta.status, alta.text.slice(0, 400));
+
+      const agenciaId: string = alta.body?.id;
+      const sucursales = (alta.body?.sucursales ?? []) as {
+        id: string;
+        usuario: string;
+        email: string;
+      }[];
+      t.is('nacen las dos sucursales', 2, sucursales.length);
+      t.is(
+        'cada una conserva su nombre de usuario',
+        `matriz.${sello},sucursal.${sello}`,
+        sucursales
+          .map((x) => x.usuario)
+          .sort()
+          .join(','),
+      );
+
+      try {
+        // BCB genera una contraseña DISTINTA por sucursal, así que se leen de la base:
+        // por diseño no salen en la respuesta, solo viajan por correo.
+        const db = bcbDb();
+        const filas = await db.agencyRfc.findMany({
+          where: { agencyId: agenciaId },
+          select: { id: true, username: true, passwordHash: true },
+        });
+        t.assert(
+          'cada sucursal guarda su propio hash',
+          new Set(filas.map((f) => f.passwordHash)).size === 2,
+        );
+
+        // Se fija una contraseña conocida por sucursal para poder entrar con cada una.
+        const hash =
+          '$2b$12$HDNcRuUcQ0o3P.sij7.JP.nzxqpQS28h5WQrUuXXFoP4wmL2r6Cia';
+        await db.agencyRfc.updateMany({
+          where: { agencyId: agenciaId },
+          data: { passwordHash: hash, isTempPassword: true },
+        });
+
+        const conCorreo = await login(`matriz.${sello}@example.com`, 'AgenciaDemo2026!');
+        t.is('entra con el correo', 200, conCorreo.status, conCorreo.text.slice(0, 200));
+
+        // El DCU llama credenciales a "Usuario y Contraseña": el nombre de usuario
+        // también abre, porque es único en toda la tabla.
+        const conUsuario = await login(`sucursal.${sello}`, 'AgenciaDemo2026!');
+        t.is('y también con el nombre de usuario', 200, conUsuario.status, conUsuario.text.slice(0, 200));
+        t.is(
+          'el perfil dice con qué sucursal entró',
+          `sucursal.${sello}`,
+          conUsuario.body?.agencia?.usuario,
+        );
+
+        // Las dos sesiones conviven: antes la sesión era una por agencia y la segunda
+        // entrada echaba a la primera.
+        const vivas = await db.agencySession.count({
+          where: { agencyId: agenciaId },
+        });
+        t.is('las dos sesiones conviven', 2, vivas);
+
+        // Cambiar la contraseña de una NO toca la de la otra.
+        const cambio = await http('POST', `${SAT_URL}/auth/change-password`, {
+          token: conCorreo.body.accessToken,
+          body: { contrasenaActual: 'AgenciaDemo2026!', contrasenaNueva: 'OtraClave2026!' },
+        });
+        t.is('cambia su contraseña', 204, cambio.status, cambio.text.slice(0, 200));
+
+        const otraSigue = await login(`sucursal.${sello}`, 'AgenciaDemo2026!');
+        t.is('la otra sucursal conserva la suya', 200, otraSigue.status, otraSigue.text.slice(0, 200));
+
+        const yaNo = await login(`matriz.${sello}@example.com`, 'AgenciaDemo2026!');
+        t.is('y la que cambió ya no entra con la anterior', 401, yaNo.status);
+      } finally {
+        await adminDelete(`/agencies/${agenciaId}`);
+      }
     },
   },
 ];
