@@ -118,9 +118,10 @@ flow_up() {
   # deny-by-default (@AgencyAccess) a esos tokens.
   # SECRET_PEM_PORTALAGENCIAS_JWT_PRIVATE_KEY es la privada del leg portal-sat, con la que
   # el satélite FIRMA sus llamadas salientes al adapter. Su pública es el JWT_PUBLIC_KEY con
-  # el que arranca adapter-portalagencias: sin esto, todo /agencies/** da 401 (las tres
-  # rutas de login son la excepción, son públicas en el adapter).
-  python3 - "$REPO_SAT/.env" "$SAT_DB_URL" "$PORT_SAT" "http://localhost:$PORT_ADAPTER_PA" \
+  # el que arranca adapter-portalagencias: sin esto, todo /portalagencias/agencies/** da 401
+  # (las rutas de login son la excepción, son públicas en el adapter). La base INCLUYE el
+  # prefijo /portalagencias, igual que en dev detrás del balanceador.
+  python3 - "$REPO_SAT/.env" "$SAT_DB_URL" "$PORT_SAT" "http://localhost:$PORT_ADAPTER_PA/portalagencias" \
     "$(b64 "$(key_path "$LEG_ADAPTER_PA-public.pem")")" "$(b64 "$(key_path "$LEG_AGENCY-public.pem")")" \
     "$(key_path "$LEG_SAT_IN-private-pkcs8.pem")" <<'PY'
 import sys, re
