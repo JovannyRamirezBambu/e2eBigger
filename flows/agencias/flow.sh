@@ -232,7 +232,9 @@ PY
     stop_bg adapter-bcb; kill_port "$PORT_ADAPTER_BCB"
   fi
   export BCB_AUTH_SATELLITE_URL="http://localhost:$PORT_BCB_AUTH"
-  # El catálogo de endpoints ya trae el prefijo /portal, así que la base va sin sufijo.
+  # El catálogo de endpoints ya trae el prefijo /portal, así que en local la base va sin sufijo
+  # (Nest directo). En AWS la base termina en /agencies/portal: ese recurso de API Gateway recorta
+  # el prefijo y a Nest le llega solo lo que sigue; con /develop/agencies a secas todo da 404.
   export SATELLITE_AGENCIES_URL="http://localhost:$PORT_BCB_AGENCIES"
   start_adapter_bcb "$REPO_MAIN" "http://localhost:3009" "http://localhost:3011" "$LEG_BCB"
 
