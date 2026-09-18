@@ -121,11 +121,16 @@ flow_up() {
   # el que arranca adapter-portalagencias: sin esto, todo /portalagencias/agencies/** da 401
   # (las rutas de login son la excepción, son públicas en el adapter). La base INCLUYE el
   # prefijo /portalagencias, igual que en dev detrás del balanceador.
+  # BCB_AUTH_URL / BCB_COMMERCE_URL / BCB_CLIENTS_URL: el módulo de venta del portal
+  # (BcbAgencySessionService, BcbSalesService) las exige EN EL CONSTRUCTOR, así que sin
+  # ellas el satélite no arranca — aunque este flujo todavía no ejercite la venta.
+  # `auth` sí lo levanta el harness; `commerce` y `clients` no, y sus puertos quedan
+  # apuntados para cuando un flujo los necesite.
   python3 - "$REPO_SAT/.env" "$SAT_DB_URL" "$PORT_SAT" "http://localhost:$PORT_ADAPTER_PA/portalagencias" \
     "$(b64 "$(key_path "$LEG_ADAPTER_PA-public.pem")")" "$(b64 "$(key_path "$LEG_AGENCY-public.pem")")" \
-    "$(key_path "$LEG_SAT_IN-private-pkcs8.pem")" <<'PY'
+    "$(key_path "$LEG_SAT_IN-private-pkcs8.pem")" "http://localhost:$PORT_BCB_AUTH" <<'PY'
 import sys, re
-path, dburl, port, adapter, pub_adapter, pub_agency, priv_sat = sys.argv[1:8]
+path, dburl, port, adapter, pub_adapter, pub_agency, priv_sat, bcb_auth = sys.argv[1:9]
 vals = {
     'PORT': port,
     'NODE_ENV': 'development',
@@ -136,6 +141,9 @@ vals = {
     'JWT_PUBLIC_KEY_BCB_AGENCY': pub_agency,
     'SECRET_PEM_PORTALAGENCIAS_JWT_PRIVATE_KEY': priv_sat,
     'ADAPTER_JWT_ISSUER': 'portal-agencias-api',
+    'BCB_AUTH_URL': bcb_auth,
+    'BCB_COMMERCE_URL': 'http://localhost:3014/commerce',
+    'BCB_CLIENTS_URL': 'http://localhost:3015/clients',
 }
 seen, out = set(), []
 for ln in open(path).read().splitlines():

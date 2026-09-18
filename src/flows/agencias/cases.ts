@@ -810,11 +810,22 @@ export const cases: CaseDef[] = [
         t.is('el refresh ya no sirve', 401, renovar.status, renovar.text.slice(0, 200));
 
         // Y el access token que la agencia tiene en la mano deja de abrir.
+        //
+        // 401 o 403 según qué chequeo dispare primero, y los dos cortan el acceso:
+        // 403 lo daba AgencyStatusGuard leyendo la copia local ("agencia inactiva").
+        // Desde `6dd5b7e feat(agencies): validar sesión de venta directo en BCB`, el
+        // satélite valida la sesión contra BCB antes de eso, y como inactivar borra la
+        // sesión en BCB, lo que sale primero es un 401 "sesión no encontrada". Lo que se
+        // prueba acá es que el token deje de abrir, no cuál de los dos guardias ganó.
+        const cortado = (status: number) => status === 401 || status === 403;
+
         const despues = await satGet('/auth/me', s.accessToken);
-        t.is('el access token deja de abrir', 403, despues.status, despues.text.slice(0, 200));
+        t.is('el access token deja de abrir', true, cortado(despues.status),
+          `status=${despues.status} ${despues.text.slice(0, 160)}`);
 
         const propio = await satGet(`/agencies/${AGENCIA.id}`, s.accessToken);
-        t.is('tampoco sus propios datos', 403, propio.status, propio.text.slice(0, 200));
+        t.is('tampoco sus propios datos', true, cortado(propio.status),
+          `status=${propio.status} ${propio.text.slice(0, 160)}`);
       } finally {
         const prender = await adminPatch(`/agencies/${AGENCIA.id}/status`, { status: 'ACTIVE' });
         t.is('se vuelve a activar', 200, prender.status, prender.text.slice(0, 200));
