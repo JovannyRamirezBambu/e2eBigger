@@ -7,7 +7,7 @@
  */
 export const AGENCIA = {
   id: '0f1e2d3c-4b5a-4c6d-8e9f-a0b1c2d3e4f5',
-  nombre: 'Agencia Demo Portal',
+  name: 'Agencia Demo Portal',
   rfc: 'ADP010101AB1',
   email: 'agencia.demo@example.com',
   password: 'AgenciaDemo2026!',
@@ -33,7 +33,9 @@ export const PORTS = {
 } as const;
 
 export const SAT_URL = `http://localhost:${PORTS.sat}/portal-agencias`;
-export const ADAPTER_PA_URL = `http://localhost:${PORTS.adapterPa}`;
+// Con el prefijo: todo lo que expone adapter-portalagencias cuelga de /portalagencias, igual que
+// detrás del balanceador de biger.
+export const ADAPTER_PA_URL = `http://localhost:${PORTS.adapterPa}/portalagencias`;
 export const BCB_AUTH_URL = `http://localhost:${PORTS.bcbAuth}`;
 
 export const SAT_DB = {
