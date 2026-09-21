@@ -102,10 +102,17 @@ async function main() {
   const DEPARTURE = new Date(SALE_DATE);
   DEPARTURE.setDate(DEPARTURE.getDate() + 2);
   DEPARTURE.setHours(8, 0, 0, 0);
+  // Ojo con el ID de la corrida: en BCB **no es un uuid**, es la clave de negocio
+  // (`CAPUA0300N9364282` = terminal + hora + tipo + consecutivo) y es lo que el reporte entrega
+  // como CLAVE_CORRIDA. El default del esquema sí es uuid, así que una corrida sembrada sin id
+  // deja el reporte mostrando un uuid donde el cliente espera su clave, y parece un defecto del
+  // mapeo cuando es de los datos.
+  const corridasPrevias = await prisma.trip.count();
   const corrida =
     (await prisma.trip.findFirst({ where: { routeId: ruta.id, departure: DEPARTURE } })) ??
     (await prisma.trip.create({
       data: {
+        id: `E2EPU0800N${String(corridasPrevias + 1).padStart(7, '0')}`,
         routeId: ruta.id, departure: DEPARTURE, status: 'CLOSED',
         priceOneWay: 250, priceRound: 500,
       },
