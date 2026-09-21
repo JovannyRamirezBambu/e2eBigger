@@ -283,6 +283,82 @@ auth.
 apuntando al `apps/auth` local (por defecto va al API Gateway de develop), y otro
 flujo pudo haberlo dejado arriba sin esa variable.
 
+### `reporteo` — generar y descargar un reporte
+
+Cadena completa: **CMS → `adapter-reportes` → satélite Reporteo → NATS request/reply →
+`adapter-bcb` → `apps/reports` → archivo**.
+
+| Componente | Repo | Puerto |
+|---|---|---|
+| `adapter-reportes` (jar en el host) | `BIGER_EstrellaRoja_Main` | `:8097` |
+| Satélite Reporteo (su propio compose) | `BIGER_EstrellaRoja_Reportes` | `:9110`, BD `:5435` |
+| NATS ×3 + `adapter-invoice` + Postgres | `BIGER_EstrellaRoja_Main` | `:4222` / `:8222` / `:5433` |
+| `adapter-bcb` (con `SATELLITE_REPORTS_URL` local) | `BIGER_EstrellaRoja_Main` | `:8085` |
+| `apps/reports` (generación del .xlsx) | `BCB_EstrellaRoja_Backend` | `:3010`, BD `:5436` |
+| "Bucket" local que sirve los archivos | el propio bootstrap | `:7806` |
+
+`up` cierra con una **prueba de humo**: pide el reporte de Venta de boletos de los
+últimos 7 días, espera a que el job llegue a un estado terminal y lo descarga a
+`run/reporteo-humo.xlsx`. Si eso pasa, la cadena entera funciona.
+
+**Este flujo no trae casos en `test`.** Los reportes se ejercitan con la colección Bruno
+del satélite, que vive con el código que prueba:
+
+```bash
+cd $ER_ROOT/BIGER_EstrellaRoja_Reportes/bruno/reportes
+npx @usebruno/cli run --env Local -r     # 18 requests / 31 pruebas
+```
+
+**Corre sin credenciales de AWS.** `apps/reports` arranca con
+`lib/bcb-reports-bootstrap.ts`, que sustituye dos providers: `SecretManagerService`
+(devuelve la pública del leg `adapter-bcb`) y `S3Service`. Ese segundo doble **sí guarda
+los bytes de verdad**, en `run/reports-bucket/`, y levanta un servidor mínimo que los
+sirve — la descarga responde un 302 a una URL prefirmada, así que un doble que solo
+devolviera una URL falsa dejaría la descarga rota y el flujo no probaría nada.
+
+**El seed sí es versionado, y reusa catálogos.** `lib/bcb-reports-seed.ts` agrega una venta
+redonda **pagada** (`Order.status = PAID`: su default es `AWAITING_PAYMENT` y los reportes
+de venta la excluyen a propósito, así que con el default todo sale `EMPTY`). Los catálogos
+—empresa, servicio, terminales, caja— se reusan si existen en vez de crear unos propios:
+casi todos sus campos son únicos y insistir en nombres propios choca con el seed oficial.
+El folio del boleto queda en `run/reporteo-folio.txt`: es el filtro **obligatorio** del
+reporte de movimientos (CU-005), que no se puede pedir sin él.
+
+**La venta se siembra enlazada, y eso no es adorno.** Corrida, asiento, cajero y tipo de
+pasajero se cuelgan de la venta porque casi ninguna columna del reporte sale de
+`OrderItem`: el mapeo (`libs/tickets-history/src/history-detail-rows.ts`) resuelve
+SERVICIO / ORIGEN / DESTINO / EMPRESA por `tripSeat.trip.route`, CLAVE_CORRIDA por el id
+de la corrida, NO_ASIENTO por el asiento, CLAVE_CAJERO por `order.Advisor` y TIPO_PASAJERO
+por `passenger.passengerType`, y cae a `N/A` cuando la relación falta. Una venta suelta
+baja un archivo de **11 de 23 columnas en N/A**, que no sirve para dos cosas: no delata un
+mapeo mal cableado (también daría `N/A`) y no se le puede mostrar a nadie como muestra del
+formato. Tampoco se podría probar el filtro por clave de corrida de CU-004: se resuelve
+contra `tripSeat.trip.id`, así que sin asiento devuelve `EMPTY` siempre. El seed **repara**
+las ventas que dejaron corridas anteriores suyas (las reconoce por `providerPaymentId`);
+las que sembró otra cosa se quedan como estén.
+
+**El `adapter-bcb` mal apuntado es la trampa de este flujo.** Su
+`satellite.reports.base-url` cae por defecto al **API Gateway de develop en AWS**, así que
+un `adapter-bcb` levantado por cualquier otro flujo genera reportes contra un ambiente
+desplegado. El síntoma tarda y engaña: la petición responde `202`, y minutos después el job
+queda `FAILED` con `SYS_001`, porque el 403 que contesta AWS (`Invalid key=value pair in
+Authorization header` — API Gateway espera SigV4 y el adapter manda un `Bearer`) recién
+aparece en el log del adapter. Por eso la URL es el **5.º argumento de
+`start_adapter_bcb`**, con default `http://localhost:3010`, y no una variable exportada:
+un flujo que no corre `apps/reports` falla en seco en local en vez de pegarle a develop.
+`up` además reinicia el `adapter-bcb` siempre, y `status` avisa si el proceso vivo llamó a
+un `execute-api` de AWS.
+
+**Vista para probar a mano** — `./e2e demo reporteo` (`:7790`). No es la pantalla del CMS
+(esa la hace el dev de frontend): es lo mínimo para ejercitar la cadena sin Bruno ni curl.
+Lee el catálogo del adapter y arma los controles con lo que el satélite declara —esconde las
+fechas donde `dateRange` es `NONE`, avisa dónde vaciarlas significa "hoy", pinta un campo por
+filtro y una casilla por columna—, hace el `202` → polling → descarga, y muestra la petición
+y la respuesta crudas al lado. A propósito **no** marca los campos obligatorios como
+`required`: dejar pasar la petición incompleta es lo que permite ver el código real que
+devuelve el backend (`VALIDATION_014`, `VALIDATION_001`, `BIZ_001`…), que es justo lo que el
+CMS tendrá que pintar. `EMPTY` sale como aviso amarillo, no como error: es éxito sin filas.
+
 ## Agregar un flujo
 
 Dos piezas, y el entrypoint no se toca.
@@ -373,6 +449,12 @@ Cada una costó tiempo de depuración en su momento:
 - **`.env` con PEM partido.** Si alguien mete una llave con `sed` cuyo reemplazo
   trae `\n`, sed lo convierte en saltos de línea reales y `docker compose` deja
   de poder leer el `.env`. `up` descarta esas líneas huérfanas.
+
+**`SERVER_PORT` exportado se pega al siguiente servicio.** Levantar dos adapters a mano en
+la misma terminal, cargando los dos archivos de entorno, hace que el segundo herede el
+`SERVER_PORT` del primero: se queda con su puerto y el otro no arranca. El síntoma no es un
+error claro sino un reporte que muere en `FAILED` cinco minutos después, porque nadie
+contesta por NATS. Cada flujo pasa `SERVER_PORT` explícito en el arranque.
 
 ## Notas
 
