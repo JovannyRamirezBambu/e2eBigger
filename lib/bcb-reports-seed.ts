@@ -37,6 +37,83 @@ const SALE_DATE = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
 /** Marca de las ventas de este seed: sirve para reconocer las de corridas anteriores. */
 const PAYMENT_REF = 'e2e-ref-1';
 
+/** Clave corta del tipo de pasajero, como la nombran los reportes del legado. */
+const CLAVE_ADULTO = 'A';
+
+/** Un id con forma de uuid es una corrida que este seed dejó sin clave de negocio. */
+const ES_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Clave con la forma de las de BCB: terminal + hora de salida + tipo + consecutivo.
+ *
+ * El consecutivo sale de la última clave emitida, no de contar corridas: al re-etiquetar se borra
+ * una por cada una que se crea, así que contar devolvería el mismo número y la segunda creación
+ * chocaría con el id de la primera.
+ */
+const PREFIJO_CORRIDA = 'E2EPU0800N';
+
+async function claveDeCorrida() {
+  const ultima = await prisma.trip.findFirst({
+    where: { id: { startsWith: PREFIJO_CORRIDA } },
+    orderBy: { id: 'desc' },
+    select: { id: true },
+  });
+  const consecutivo = ultima
+    ? Number(ultima.id.slice(PREFIJO_CORRIDA.length)) + 1
+    : 1;
+  return `${PREFIJO_CORRIDA}${String(consecutivo).padStart(7, '0')}`;
+}
+
+/**
+ * Cambia por una clave de negocio el uuid de las corridas que sembraron corridas ANTERIORES de
+ * este seed. Sin esto, una base que ya se sembró sigue bajando reportes con un uuid en
+ * CLAVE_CORRIDA para siempre, porque la corrida del día se reutiliza.
+ *
+ * El id es llave foránea de los asientos y no se puede editar, así que se cambia de corrida: la
+ * vieja se marca borrada —el índice único de (ruta, salida) es parcial y solo mira las vivas, así
+ * que la nueva puede nacer con la misma salida—, se le pasan los asientos y la vieja se borra.
+ * Solo toca corridas a las que llegan boletos de ESTE seed; las de otros flujos no se tocan.
+ */
+async function reetiquetarCorridasViejas() {
+  const mios = await prisma.orderItem.findMany({
+    where: { order: { providerPaymentId: PAYMENT_REF }, NOT: { tripSeatId: null } },
+    select: { tripSeat: { select: { id: true, tripId: true } } },
+  });
+
+  const asientosPorCorrida = new Map<string, string[]>();
+  for (const { tripSeat } of mios) {
+    if (!tripSeat || !ES_UUID.test(tripSeat.tripId)) continue;
+    asientosPorCorrida.set(tripSeat.tripId, [
+      ...(asientosPorCorrida.get(tripSeat.tripId) ?? []),
+      tripSeat.id,
+    ]);
+  }
+
+  for (const [viejaId, asientos] of asientosPorCorrida) {
+    const vieja = await prisma.trip.findUnique({ where: { id: viejaId } });
+    if (!vieja) continue;
+
+    await prisma.trip.update({ where: { id: viejaId }, data: { deletedAt: new Date() } });
+    const nueva = await prisma.trip.create({
+      data: {
+        id: await claveDeCorrida(),
+        routeId: vieja.routeId, departure: vieja.departure, status: vieja.status,
+        priceOneWay: vieja.priceOneWay, priceRound: vieja.priceRound,
+      },
+    });
+    await prisma.tripSeat.updateMany({
+      where: { id: { in: asientos } },
+      data: { tripId: nueva.id },
+    });
+
+    // Solo se borra si no le quedó ningún asiento de otro origen: borrarla arrastraría los suyos.
+    if ((await prisma.tripSeat.count({ where: { tripId: viejaId } })) === 0) {
+      await prisma.trip.delete({ where: { id: viejaId } });
+    }
+    console.log(`corrida ${viejaId} → ${nueva.id} (${asientos.length} asientos)`);
+  }
+}
+
 async function main() {
   // Los catálogos se REUSAN si ya existen. No se buscan por una clave propia: casi todos
   // sus campos son únicos (`Company.shortName`, `Service.fullName`, `Station.number`…), así
@@ -107,22 +184,43 @@ async function main() {
   // como CLAVE_CORRIDA. El default del esquema sí es uuid, así que una corrida sembrada sin id
   // deja el reporte mostrando un uuid donde el cliente espera su clave, y parece un defecto del
   // mapeo cuando es de los datos.
-  const corridasPrevias = await prisma.trip.count();
+  await reetiquetarCorridasViejas();
+
   const corrida =
-    (await prisma.trip.findFirst({ where: { routeId: ruta.id, departure: DEPARTURE } })) ??
+    (await prisma.trip.findFirst({
+      where: { routeId: ruta.id, departure: DEPARTURE, deletedAt: null },
+    })) ??
     (await prisma.trip.create({
       data: {
-        id: `E2EPU0800N${String(corridasPrevias + 1).padStart(7, '0')}`,
+        id: await claveDeCorrida(),
         routeId: ruta.id, departure: DEPARTURE, status: 'CLOSED',
         priceOneWay: 250, priceRound: 500,
       },
     }));
 
-  // Cajero y tipo de pasajero se REUSAN: crearlos cuesta un `Admin` y un `File` (los exige
-  // el esquema) y los bootstraps de los otros flujos ya dejaron los dos catálogos. Si el
-  // seed oficial no corrió, quedan en null y esas columnas vuelven a N/A — sin reventar.
+  // El cajero se REUSA: crearlo cuesta un `Admin` y una terminal, y los bootstraps de los otros
+  // flujos ya lo dejaron. Si el seed oficial no corrió queda en null y esas columnas vuelven a
+  // N/A, sin reventar.
   const cajero = await prisma.advisorUser.findFirst();
-  const tipoPasajero = await prisma.passengerType.findFirst();
+
+  // El tipo de pasajero NO se reusa a ciegas: el reporte entrega su CLAVE (`A`, `S`, `M`…, así
+  // la trae el archivo del cliente) y los catálogos que dejan los otros flujos usan claves suyas
+  // como `E2ETCO-ADULTO`, que en la columna TIPO_PASAJERO se ve como un dato roto. Si no hay una
+  // clave corta se siembra una; cuesta un `File`, que solo pide escalares.
+  const tipoPasajero =
+    (await prisma.passengerType.findFirst({ where: { key: CLAVE_ADULTO } })) ??
+    (await prisma.passengerType.create({
+      data: {
+        key: CLAVE_ADULTO, name: 'Adulto E2E', discountPercent: 0,
+        icon: {
+          create: {
+            name: 'adulto.svg', path: 'e2e/adulto.svg',
+            url: 'https://example.invalid/e2e/adulto.svg',
+            mimetype: 'image/svg+xml', size: 1,
+          },
+        },
+      },
+    }));
 
   const order = await prisma.order.create({
     data: {
@@ -143,7 +241,7 @@ async function main() {
     const asiento = await prisma.tripSeat.create({
       data: {
         tripId: corrida.id, number: asientosOcupados + i + 1,
-        status: 'BOOKED', passengerTypeId: tipoPasajero?.id ?? null,
+        status: 'BOOKED', passengerTypeId: tipoPasajero.id,
       },
     });
     const item = await prisma.orderItem.create({
@@ -160,7 +258,7 @@ async function main() {
       data: {
         name: i === 0 ? 'Juan Perez' : 'Maria Lopez',
         isMainPassenger: i === 0,
-        passengerTypeId: tipoPasajero?.id ?? null,
+        passengerTypeId: tipoPasajero.id,
         orderItemId: item.id,
       },
     });
@@ -178,7 +276,7 @@ async function main() {
     const asiento = await prisma.tripSeat.create({
       data: {
         tripId: corrida.id, number: asientosOcupados + folios.length + i + 1,
-        status: 'BOOKED', passengerTypeId: tipoPasajero?.id ?? null,
+        status: 'BOOKED', passengerTypeId: tipoPasajero.id,
       },
     });
     await prisma.orderItem.update({
@@ -196,9 +294,22 @@ async function main() {
         passengerTypeId: null,
         orderItem: { order: { providerPaymentId: PAYMENT_REF } },
       },
-      data: { passengerTypeId: tipoPasajero?.id ?? null },
+      data: { passengerTypeId: tipoPasajero.id },
     });
     console.log(`reparadas ${sinAsiento.length} ventas viejas del seed (sin corrida ni asiento)`);
+  }
+
+  // Los pasajeros que sembraron corridas anteriores pueden apuntar al catálogo de otro flujo, con
+  // una clave que en el reporte se ve como un dato roto. Se repintan al de clave corta.
+  const repintados = await prisma.passenger.updateMany({
+    where: {
+      orderItem: { order: { providerPaymentId: PAYMENT_REF } },
+      NOT: { passengerTypeId: tipoPasajero.id },
+    },
+    data: { passengerTypeId: tipoPasajero.id },
+  });
+  if (repintados.count) {
+    console.log(`${repintados.count} pasajeros repintados al tipo '${CLAVE_ADULTO}'`);
   }
 
   const total = await prisma.orderItem.count();
