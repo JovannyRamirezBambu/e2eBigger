@@ -253,14 +253,18 @@ PY
   [ -n "$job" ] || die "el POST de generación no devolvió jobId"
   wait_for "job $job en estado terminal" 90 bash -c \
     "curl -s http://localhost:$PORT_ADAPTER_REPORTES$ADAPTER_PREFIX/reports/$job | grep -qE '\"(READY|EMPTY|FAILED)\"'" || return 1
-  status=$(curl -s "http://localhost:$PORT_ADAPTER_REPORTES$ADAPTER_PREFIX/reports/$job" \
-    | python3 -c 'import sys,json; print(json.load(sys.stdin)["status"])')
+  # El link de descarga se SIGUE del cuerpo del job, no se arma aquí: es lo que hará el CMS, y
+  # así el humo se entera si la ruta cambia en vez de probar una que ya no existe.
+  local url
+  read -r status url < <(curl -s "http://localhost:$PORT_ADAPTER_REPORTES$ADAPTER_PREFIX/reports/$job" \
+    | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["status"], d.get("downloadUrl") or "-")')
   case "$status" in
     READY)
       local bytes
-      bytes=$(curl -s -L -o "$RUN_DIR/reporteo-humo.xlsx" -w '%{size_download}' \
-        "http://localhost:$PORT_ADAPTER_REPORTES$ADAPTER_PREFIX/reports/$job/download")
+      [ "$url" != "-" ] || die "el job quedó READY sin downloadUrl"
+      bytes=$(curl -s -L -o "$RUN_DIR/reporteo-humo.xlsx" -w '%{size_download}' "$url")
       ok "reporte descargado: $bytes bytes en $RUN_DIR/reporteo-humo.xlsx"
+      dim "   (siguiendo la downloadUrl del job: $url)"
       ;;
     EMPTY) warn "el job terminó EMPTY: no hay ventas en el rango (¿se sembró?)" ;;
     *)     err "el job terminó en $status — revisá $LOG_DIR/adapter-reportes.log"; return 1 ;;
