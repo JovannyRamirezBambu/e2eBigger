@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reportes — prueba manual</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --ink: #14171a; --dim: #626b75;
+    --line: #dfe3e8; --accent: #1f4ea1; --accent-ink: #fff;
+    --ok: #17703f; --warn: #8a5a00; --err: #a3242b; --code-bg: #eef1f4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14171a; --card: #1c2126; --ink: #e8eaed; --dim: #9aa4ae;
+      --line: #2c333a; --accent: #6aa0f0; --accent-ink: #0d1117;
+      --ok: #5fcf8e; --warn: #e0b34d; --err: #f07178; --code-bg: #121619;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 24px 16px 64px; }
+  header { margin-bottom: 20px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  header p { margin: 0; color: var(--dim); font-size: 13px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--dim); margin: 0 0 12px; font-weight: 600; }
+  label { display: block; font-size: 13px; color: var(--dim); margin: 10px 0 4px; }
+  select, input[type=text], input[type=date] { width: 100%; padding: 8px 10px; font: inherit;
+    color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+  .row { display: flex; gap: 10px; } .row > * { flex: 1; }
+  button { font: inherit; font-weight: 600; padding: 10px 16px; border: 0; border-radius: 6px;
+    background: var(--accent); color: var(--accent-ink); cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); font-weight: 500; }
+  /* Una plantilla puede traer 7 filtros; apilados dejan el botón fuera de la pantalla. */
+  #filtros { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+  @media (max-width: 560px) { #filtros { grid-template-columns: 1fr; } }
+  .cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 2px 12px; max-height: 260px; overflow: auto; }
+  .cols label { display: flex; align-items: center; gap: 6px; margin: 0; padding: 3px 0;
+    color: var(--ink); font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .cols input { margin: 0; }
+  .hint { font-size: 12px; color: var(--dim); margin-top: 4px; }
+  .badge { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .04em;
+    padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line); }
+  .b-ok { color: var(--ok); border-color: var(--ok); }
+  .b-warn { color: var(--warn); border-color: var(--warn); }
+  .b-err { color: var(--err); border-color: var(--err); }
+  .msg { margin-top: 12px; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--line);
+    font-size: 13.5px; }
+  .msg.ok { border-color: var(--ok); } .msg.warn { border-color: var(--warn); }
+  .msg.err { border-color: var(--err); }
+  .msg code { font-size: 12px; }
+  pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 6px;
+    padding: 10px; overflow: auto; max-height: 300px; font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0 0 10px; }
+  .hidden { display: none !important; }
+  footer { margin-top: 24px; color: var(--dim); font-size: 12px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Reportes — prueba manual</h1>
+    <p>No es la pantalla del CMS. Le pega directo a <code id="adapterUrl"></code> para probar la
+       cadena a mano.</p>
+  </header>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Generar</h2>
+
+      <label for="tpl">Tipo de reporte</label>
+      <select id="tpl"></select>
+      <div class="hint" id="tplHint"></div>
+
+      <div id="fechas">
+        <div class="row">
+          <div><label for="desde">Fecha inicio</label><input type="date" id="desde"></div>
+          <div><label for="hasta">Fecha fin</label><input type="date" id="hasta"></div>
+        </div>
+        <div class="hint" id="fechasHint"></div>
+      </div>
+
+      <div id="filtros"></div>
+
+      <label style="margin-top:14px">Personalizar reporte
+        <span class="hint" style="display:inline">· <a href="#" id="todas">todas</a> ·
+        <a href="#" id="ninguna">ninguna</a></span>
+      </label>
+      <div class="cols" id="cols"></div>
+
+      <div style="margin-top:16px; display:flex; gap:8px; align-items:center">
+        <button id="go">Generar y descargar</button>
+        <span id="estado"></span>
+      </div>
+
+      <div id="msg" class="msg hidden"></div>
+    </div>
+
+    <div class="card">
+      <h2>Lo que va y lo que vuelve</h2>
+      <div class="hint" style="margin:0 0 6px">Petición</div>
+      <pre id="req">—</pre>
+      <div class="hint" style="margin:0 0 6px">Respuesta / último estado del job</div>
+      <pre id="res">—</pre>
+      <button class="ghost" id="recargar">Recargar catálogo</button>
+    </div>
+  </div>
+
+  <footer>
+    El contrato completo está en <code>ER/_reporteo-docs/05-contrato-para-el-cms.md</code>.
+    El stack se levanta con <code>./e2e up reporteo</code>.
+  </footer>
+</div>
+
+<script src="/config.js"></script>
+<script>
+const API = window.ADAPTER_URL;
+document.getElementById('adapterUrl').textContent = API;
+
+// Los mensajes del catálogo del DCU. Es la tabla que la pantalla real tiene que traducir,
+// así que se prueba aquí también.
+const MENSAJES = {
+  BIZ_001: 'El rango seleccionado supera los 90 días, o empieza más atrás de lo que el sistema guarda.',
+  BIZ_002: 'La plantilla de reporte solicitada no está disponible o fue desactivada.',
+  BIZ_005: 'El reporte todavía no está listo.',
+  BIZ_006: 'El enlace de descarga expiró; genera el reporte de nuevo.',
+  VALIDATION_001: 'Esta plantilla requiere el rango de fechas completo.',
+  VALIDATION_003: 'El formato de la fecha capturada no es válido.',
+  VALIDATION_010: 'La consulta no arrojó resultados para los filtros seleccionados.',
+  VALIDATION_011: 'Ese reporte ya no existe.',
+  VALIDATION_012: 'Alguna columna no pertenece a esta plantilla.',
+  VALIDATION_013: 'Esta plantilla no se filtra por fechas.',
+  VALIDATION_014: 'Falta un filtro obligatorio de esta plantilla.',
+  VALIDATION_015: 'Se envió un filtro que esta plantilla no reconoce.',
+  SYS_001: 'Ocurrió un error inesperado al generar el reporte.',
+  SYS_002: 'El reporte histórico depende del Data Lake, que aún no está disponible.',
+};
+
+// Nombres legibles de los filtros propios, para no mostrarle claves al que prueba.
+const ETIQUETAS = {
+  ticketNumber: 'Folio preimpreso', passengerName: 'Nombre de pasajero',
+  tripKey: 'Clave de corrida', origin: 'Origen', destination: 'Destino',
+  seat: 'Número de asiento', tripTime: 'Hora de viaje',
+};
+
+const $ = (id) => document.getElementById(id);
+let plantillas = [];
+
+const pinta = (el, txt) => { el.textContent = typeof txt === 'string' ? txt : JSON.stringify(txt, null, 2); };
+
+function mensaje(clase, html) {
+  const m = $('msg');
+  m.className = 'msg ' + clase;
+  m.innerHTML = html;
+  m.classList.remove('hidden');
+}
+
+function actual() { return plantillas.find((t) => t.templateKey === $('tpl').value); }
+
+/** Los controles cambian según la plantilla: es lo que hay que probar (RN-006). */
+function pintaControles() {
+  const t = actual();
+  if (!t) return;
+  $('tplHint').textContent = `${t.useCase} · ${t.columns.length} columnas`;
+
+  const modo = t.filters.dateRange;
+  $('fechas').classList.toggle('hidden', modo === 'NONE');
+  $('fechasHint').textContent =
+    modo === 'REQUIRED' ? 'Obligatorio en esta plantilla.'
+    : modo === 'OPTIONAL_TODAY' ? 'Opcional: si lo dejas vacío, el reporte es del día de hoy.'
+    : '';
+
+  const req = t.filters.requiredFilters ?? [];
+  const opt = t.filters.optionalFilters ?? [];
+  $('filtros').innerHTML = [...req, ...opt].map((k) => `
+    <div>
+      <label for="f-${k}">${ETIQUETAS[k] ?? k}${req.includes(k) ? ' <b>(obligatorio)</b>' : ''}</label>
+      <input type="text" id="f-${k}" data-filtro="${k}" placeholder="${k}">
+    </div>`).join('');
+
+  $('cols').innerHTML = t.columns.map((c) => `
+    <label><input type="checkbox" value="${c}" checked>${c}</label>`).join('');
+
+  $('msg').classList.add('hidden');
+  pinta($('res'), '—');
+}
+
+async function cargarCatalogo() {
+  try {
+    const r = await fetch(`${API}/report-templates`);
+    plantillas = await r.json();
+    $('tpl').innerHTML = plantillas
+      .map((t) => `<option value="${t.templateKey}">${t.name}</option>`).join('');
+    pintaControles();
+  } catch (e) {
+    mensaje('err', `No pude leer el catálogo en <code>${API}</code>. ¿Está arriba el stack?
+      <br><code>./e2e up reporteo</code>`);
+  }
+}
+
+function cuerpo() {
+  const t = actual();
+  const body = { templateKey: t.templateKey };
+  if (t.filters.dateRange !== 'NONE') {
+    if ($('desde').value) body.dateFrom = $('desde').value;
+    if ($('hasta').value) body.dateTo = $('hasta').value;
+  }
+  const filtros = {};
+  document.querySelectorAll('#filtros input[data-filtro]').forEach((i) => {
+    if (i.value.trim()) filtros[i.dataset.filtro] = i.value.trim();
+  });
+  if (Object.keys(filtros).length) body.filters = filtros;
+
+  const marcadas = [...document.querySelectorAll('#cols input:checked')].map((i) => i.value);
+  if (marcadas.length && marcadas.length !== t.columns.length) body.columns = marcadas;
+  return body;
+}
+
+async function generar() {
+  const body = cuerpo();
+  pinta($('req'), { método: 'POST', url: `${API}/reports`, body });
+  $('msg').classList.add('hidden');
+  $('go').disabled = true;
+  $('estado').innerHTML = '<span class="badge">enviando…</span>';
+
+  try {
+    const r = await fetch(`${API}/reports`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    pinta($('res'), d);
+
+    if (r.status !== 202) {
+      $('estado').innerHTML = `<span class="badge b-err">HTTP ${r.status}</span>`;
+      mensaje('err', `${MENSAJES[d.code] ?? d.detail ?? 'Error'}
+        ${d.code ? `<br><code>${d.code}</code> · ${d.detail ?? ''}` : ''}`);
+      return;
+    }
+    await seguir(d.jobId);
+  } catch (e) {
+    $('estado').innerHTML = '<span class="badge b-err">sin conexión</span>';
+    mensaje('err', `No pude hablar con <code>${API}</code>: ${e.message}`);
+  } finally {
+    $('go').disabled = false;
+  }
+}
+
+/** El polling, igual que tendrá que hacerlo la pantalla real: cada 2 s, con tope. */
+async function seguir(jobId) {
+  for (let intento = 1; intento <= 45; intento++) {
+    const d = await (await fetch(`${API}/reports/${jobId}`)).json();
+    pinta($('res'), d);
+
+    if (d.status === 'QUEUED' || d.status === 'RUNNING') {
+      $('estado').innerHTML = `<span class="badge">${d.status} · intento ${intento}</span>`;
+      await new Promise((r) => setTimeout(r, 2000));
+      continue;
+    }
+    if (d.status === 'READY') {
+      const filas = `${d.rowCount} ${d.rowCount === 1 ? 'fila' : 'filas'}`;
+      $('estado').innerHTML = `<span class="badge b-ok">READY · ${filas}</span>`;
+      mensaje('ok', `Listo, ${filas}.
+        <a href="${d.downloadUrl}" download>Descargar el archivo</a>`);
+      window.location.href = d.downloadUrl;   // como lo hará el CMS: abrir el link
+      return;
+    }
+    if (d.status === 'EMPTY') {
+      // Es éxito sin filas, no un error: es la trampa más fácil de este contrato.
+      $('estado').innerHTML = '<span class="badge b-warn">EMPTY</span>';
+      mensaje('warn', MENSAJES.VALIDATION_010);
+      return;
+    }
+    $('estado').innerHTML = '<span class="badge b-err">FAILED</span>';
+    mensaje('err', `${MENSAJES[d.errorCode] ?? 'Falló la generación'}<br><code>${d.errorCode}</code>`);
+    return;
+  }
+  $('estado').innerHTML = '<span class="badge b-warn">sigue corriendo</span>';
+  mensaje('warn', 'El reporte lleva más de 90 segundos. El servidor lo marcará fallido solo si se atora.');
+}
+
+const hoy = new Date().toISOString().slice(0, 10);
+const hace7 = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
+$('desde').value = hace7; $('hasta').value = hoy;
+$('tpl').onchange = pintaControles;
+$('go').onclick = generar;
+$('recargar').onclick = cargarCatalogo;
+$('todas').onclick = (e) => { e.preventDefault();
+  document.querySelectorAll('#cols input').forEach((i) => (i.checked = true)); };
+$('ninguna').onclick = (e) => { e.preventDefault();
+  document.querySelectorAll('#cols input').forEach((i) => (i.checked = false)); };
+cargarCatalogo();
+</script>
+</body>
+</html>

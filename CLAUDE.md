@@ -175,6 +175,16 @@ you assume something is broken:
   cases therefore create a fresh trip per run (`createChainTrip` in `src/flows/tomtom/seed.ts`),
   reusing the scenario's bus/operator and deleting the previous ephemeral trip — so the suite can be
   rerun back-to-back without waiting out the dedup window.
+- **The shared `adapter-bcb` defaults to AWS for reports.** `satellite.reports.base-url`
+  falls back to the **develop API Gateway**, so an `adapter-bcb` started by any other flow
+  generates reports against a deployed environment. The symptom is slow and misleading: the
+  request returns `202` and the job only turns `FAILED`/`SYS_001` minutes later, because
+  AWS's 403 (`Invalid key=value pair in Authorization header` — API Gateway wants SigV4, the
+  adapter sends a `Bearer`) surfaces in the adapter log, not to the caller. The URL is
+  therefore the **5th argument of `start_adapter_bcb`**, defaulting to `http://localhost:3010`,
+  never an exported env var: a flow that doesn't run `apps/reports` fails locally instead of
+  reaching develop. `./e2e status reporteo` warns when the live process called an AWS
+  `execute-api`.
 - **Split PEM lines in `.env`.** A `sed` replacement containing `\n` becomes real newlines, and
   `docker compose` then fails to parse the `.env`. `up` scripts discard orphaned lines like that.
 - **Grafted scripts.** `up` copies ephemeral scripts into sibling repos (`scripts/e2e/` in BCB,

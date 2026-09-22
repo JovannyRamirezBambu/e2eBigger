@@ -27,7 +27,10 @@ Comandos:
   ui <flujo>             Abre el panel en el navegador (diagrama + botones)
   demo [flujo]           Panel de DEMOSTRACIÓN, para presentar el flujo a
                          cliente/proveedor. Sin flujo: Venta a Bordo (:7788).
-                         `demo tomtom`: el ciclo BCB ↔ InRoute (:7789)
+                         `demo tomtom`: el ciclo BCB ↔ InRoute (:7789).
+                         `demo reporteo`: vista de prueba manual de Reportes
+                         (:7790) — no es la pantalla del CMS, es para probar
+                         la cadena a mano sin esperar el frontend
   down <flujo>           Detiene los servicios de este flujo
   status <flujo>         Qué está arriba y qué no
   psql <flujo>           Abre psql en la BD principal del flujo
@@ -103,6 +106,7 @@ case "$cmd" in
     case "${2:-ventaabordo}" in
       ventaabordo) exec node "$E2E_ROOT/demo/server.cjs" ;;
       tomtom)      exec node "$E2E_ROOT/demo-tomtom/server.cjs" ;;
+      reporteo)    exec node "$E2E_ROOT/demo-reporteo/server.cjs" ;;
       *) err "no hay panel de demostración para '${2}'"; exit 1 ;;
     esac
     ;;
