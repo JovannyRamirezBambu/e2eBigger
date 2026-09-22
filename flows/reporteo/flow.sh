@@ -35,7 +35,7 @@ PORT_ADAPTER_REPORTES=8097   # el que expone su application.yml
 PORT_BCB_REPORTS=3010        # app `reports` de BCB (3009 bcb, 3011 webhooks, 3012 auth, 3013 agencies)
 PORT_SAT=9110                # satélite Reporteo, publicado por su docker-compose
 PORT_FILES=7806              # "bucket" local que sirve los .xlsx (7801-7804 los usan otros flujos)
-SAT_PREFIX="/reporteo"       # context-path del satélite
+SAT_PREFIX="/reportes"       # context-path del satélite
 ADAPTER_PREFIX="/reportes"   # prefijo con el que el gateway entrega al adapter
 
 # Legs de autenticación (un par RSA por dirección, como en AWS):
