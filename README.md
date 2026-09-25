@@ -47,9 +47,11 @@ Lo que gana TypeScript en la capa de pruebas, concretamente:
 | `./e2e verify <flujo>` | Imprime el estado en BD, formateado para leerlo a ojo. |
 | `./e2e status <flujo>` | Qué está arriba y qué no. |
 | `./e2e psql <flujo>` | `psql` en la BD principal del flujo. |
+| `./e2e token <flujo> [segundos]` | Token de administración para pegarle a mano al satélite. Solo lo emiten los flujos que lo necesitan (hoy `agencias`). |
 | `./e2e logs <flujo> [srv]` | `tail -f` de un servicio. |
 | `./e2e down <flujo>` | Baja los servicios del flujo. `--all` baja también la infra compartida. |
 | `./e2e demo` | Panel de **demostración** de Venta a Bordo, para presentar los 3 servicios del contrato TI-FT-45 a cliente y proveedor. Ver [`demo/README.md`](demo/README.md). |
+| `./e2e demo tomtom` | Panel de **demostración** de TomTom: el ciclo de una corrida entre BCB e InRoute (Adsum). Ver [`demo-tomtom/README.md`](demo-tomtom/README.md). |
 | `./e2e list` | Flujos disponibles. |
 
 Correr un caso suelto mientras depurás:
@@ -58,14 +60,21 @@ Correr un caso suelto mientras depurás:
 ./e2e test tomtom t11-carrera-manual
 ```
 
-## Dos paneles, para dos cosas distintas
+## Paneles, para dos cosas distintas
 
 `./e2e ui <flujo>` (`:7777`) es el **panel de diagnóstico**: estado de la cadena y
-botones para correr los casos. `./e2e demo` (`:7788`) es el **panel de
-demostración** de Venta a Bordo, pensado para explicarle los 3 servicios del
-contrato TI-FT-45 a gente de fuera del equipo —diagramas, datos editables, y el SQL
-de validación a la vista— y para poder despachar de verdad contra el SmartMac real
-de TECNITRANS sin reiniciar nada. Está documentado en [`demo/README.md`](demo/README.md).
+botones para correr los casos.
+
+Los **paneles de demostración** son otra cosa: están pensados para explicarle el
+flujo a gente de fuera del equipo —diagramas, datos editables y el SQL de
+validación a la vista— y para poder ejercer de verdad al proveedor sin reiniciar
+nada. Hay uno por integración, porque el guion de la reunión y las validaciones no
+se parecen:
+
+| Panel | Puerto | De qué habla |
+|---|---|---|
+| `./e2e demo` | `:7788` | Venta a Bordo: los 3 servicios del contrato TI-FT-45, con SmartMac simulado o el real de TECNITRANS. [`demo/README.md`](demo/README.md) |
+| `./e2e demo tomtom` | `:7789` | TomTom: el ciclo de una corrida entre BCB e InRoute, con InRoute simulado o el real de Adsum. [`demo-tomtom/README.md`](demo-tomtom/README.md) |
 
 ## El panel
 
@@ -179,11 +188,19 @@ Cadena completa: **satélite TomTom → adapter-tomtom → NATS JetStream → ad
 
 | Componente | Repo | Puerto |
 |---|---|---|
-| Satélite TomTom (su código de firma JWT) | `BIGER_EstrellaRoja_TomTom` | BD `:5440` |
-| `adapter-tomtom` | `BIGER_EstrellaRoja_Main` | `:8088` |
+| Satélite TomTom | `BIGER_EstrellaRoja_TomTom` | `:3003`, BD `:5440` |
+| `adapter-tomtom` | `BIGER_EstrellaRoja_Main` | `:8090` (`:8088` lo reserva ventaabordo) |
 | NATS ×3 + `adapter-invoice` + Postgres | `BIGER_EstrellaRoja_Main` | `:4222` / `:8222` / `:5433` |
 | `adapter-bcb` | `BIGER_EstrellaRoja_Main` | `:8085` |
 | `apps/bcb` | `BCB_EstrellaRoja_Backend` | `:3009`, BD `:5436` |
+| InRoute falso | el panel de demostración | `:7803` |
+
+Las pruebas ejercitan CU04/CU05 invocando el cliente de callbacks del satélite
+directamente, así que no necesitan que el satélite corra como proceso ni que
+InRoute exista. El **ciclo completo** —alta del viaje en InRoute, polling de
+geocercas, telemetría— sí lo necesita, y por eso `up` levanta el satélite en
+`:3003` con `INROUTE_BASE_URL` apuntando al InRoute falso del panel: ver
+[`demo-tomtom/README.md`](demo-tomtom/README.md).
 
 33 casos: autenticación, T1 (contexto), T10 (despacho), T11 (llegada),
 idempotencia, precondiciones de estado, validación de DTOs, dos recorridos de
@@ -230,6 +247,117 @@ al adapter validando contra la llave vieja y daría un 401 inexplicable.
 una rama. El caso `t09` **espeja el DTO del adapter** en vez de fijar un
 comportamiento: afirma lo que el repo dice que hace, y se pone en rojo justo en el
 caso que importa — que el adapter lo mande y BCB lo ignore.
+
+### `agencias` — login de agencias del Portal de Agencias
+
+Cadena completa: **satélite Portal de Agencias → adapter-portalagencias → NATS
+request/reply → adapter-bcb → `apps/auth` (`/agency/*`)**.
+
+| Componente | Repo | Puerto |
+|---|---|---|
+| Satélite Portal de Agencias | `BIGER_EstrellaRoja_PortalAgenciasAdmin` | `:3002`, BD `:5434` |
+| `adapter-portalagencias` (jar en el host) | `BIGER_EstrellaRoja_Main` | `:8094` |
+| NATS ×3 + `adapter-invoice` + Postgres | `BIGER_EstrellaRoja_Main` | `:4222` / `:8222` / `:5433` |
+| `adapter-bcb` (con `BCB_AUTH_SATELLITE_URL` local) | `BIGER_EstrellaRoja_Main` | `:8085` |
+| `apps/auth` (login de agencias) | `BCB_EstrellaRoja_Backend` | `:3012`, BD `:5436` |
+| Emisor JWKS de prueba (rol `agency`) | `e2e/lib/jwks-server.js` | `:7804` |
+
+16 casos: login correcto (tokens, claims, una sesión en BD), contraseña incorrecta y
+correo inexistente (401), agencia inactiva (403 al entrar y con token válido),
+`/auth/me` en el satélite y en BCB, refresh token como Bearer (401), deny-by-default
+de `@AgencyAccess()` (endpoint admin → 403, detalle ajeno → 403, propio → 200),
+refresh que rota el access token, logout que revoca, dos logins concurrentes que
+dejan UNA sesión, rutas públicas del adapter (`/agencies/auth/*` sin token → 200,
+el resto → 401) y payload inválido → 400.
+
+**No hay seed versionado.** La agencia de prueba se da de alta ejecutando los
+mismos SQL manuales que se corren en develop (`ER/_portal-agencias-docs/`), así que
+el harness también los prueba. `apps/auth` arranca con `lib/bcb-auth-bootstrap.ts`:
+sustituye solo `SecretManagerService` (devuelve la privada del leg `bcb-agency`) y
+el JWKS que BCB consulta para verificar lo sirve `lib/jwks-server.js` con la
+pública del mismo par. Ningún eslabón corre con `JWT_BYPASS`: en el adapter lo que
+se prueba es justamente que `app.security.public-paths` abre solo las tres rutas de
+auth.
+
+`adapter-bcb` se reinicia siempre en `up`: necesita `BCB_AUTH_SATELLITE_URL`
+apuntando al `apps/auth` local (por defecto va al API Gateway de develop), y otro
+flujo pudo haberlo dejado arriba sin esa variable.
+
+### `reporteo` — generar y descargar un reporte
+
+Cadena completa: **CMS → `adapter-reportes` → satélite Reporteo → NATS request/reply →
+`adapter-bcb` → `apps/reports` → archivo**.
+
+| Componente | Repo | Puerto |
+|---|---|---|
+| `adapter-reportes` (jar en el host) | `BIGER_EstrellaRoja_Main` | `:8097` |
+| Satélite Reporteo (su propio compose) | `BIGER_EstrellaRoja_Reportes` | `:9110`, BD `:5435` |
+| NATS ×3 + `adapter-invoice` + Postgres | `BIGER_EstrellaRoja_Main` | `:4222` / `:8222` / `:5433` |
+| `adapter-bcb` (con `SATELLITE_REPORTS_URL` local) | `BIGER_EstrellaRoja_Main` | `:8085` |
+| `apps/reports` (generación del .xlsx) | `BCB_EstrellaRoja_Backend` | `:3010`, BD `:5436` |
+| "Bucket" local que sirve los archivos | el propio bootstrap | `:7806` |
+
+`up` cierra con una **prueba de humo**: pide el reporte de Venta de boletos de los
+últimos 7 días, espera a que el job llegue a un estado terminal y lo descarga a
+`run/reporteo-humo.xlsx`. Si eso pasa, la cadena entera funciona.
+
+**Este flujo no trae casos en `test`.** Los reportes se ejercitan con la colección Bruno
+del satélite, que vive con el código que prueba:
+
+```bash
+cd $ER_ROOT/BIGER_EstrellaRoja_Reportes/bruno/reportes
+npx @usebruno/cli run --env Local -r     # 18 requests / 31 pruebas
+```
+
+**Corre sin credenciales de AWS.** `apps/reports` arranca con
+`lib/bcb-reports-bootstrap.ts`, que sustituye dos providers: `SecretManagerService`
+(devuelve la pública del leg `adapter-bcb`) y `S3Service`. Ese segundo doble **sí guarda
+los bytes de verdad**, en `run/reports-bucket/`, y levanta un servidor mínimo que los
+sirve — la descarga responde un 302 a una URL prefirmada, así que un doble que solo
+devolviera una URL falsa dejaría la descarga rota y el flujo no probaría nada.
+
+**El seed sí es versionado, y reusa catálogos.** `lib/bcb-reports-seed.ts` agrega una venta
+redonda **pagada** (`Order.status = PAID`: su default es `AWAITING_PAYMENT` y los reportes
+de venta la excluyen a propósito, así que con el default todo sale `EMPTY`). Los catálogos
+—empresa, servicio, terminales, caja— se reusan si existen en vez de crear unos propios:
+casi todos sus campos son únicos y insistir en nombres propios choca con el seed oficial.
+El folio del boleto queda en `run/reporteo-folio.txt`: es el filtro **obligatorio** del
+reporte de movimientos (CU-005), que no se puede pedir sin él.
+
+**La venta se siembra enlazada, y eso no es adorno.** Corrida, asiento, cajero y tipo de
+pasajero se cuelgan de la venta porque casi ninguna columna del reporte sale de
+`OrderItem`: el mapeo (`libs/tickets-history/src/history-detail-rows.ts`) resuelve
+SERVICIO / ORIGEN / DESTINO / EMPRESA por `tripSeat.trip.route`, CLAVE_CORRIDA por el id
+de la corrida, NO_ASIENTO por el asiento, CLAVE_CAJERO por `order.Advisor` y TIPO_PASAJERO
+por `passenger.passengerType`, y cae a `N/A` cuando la relación falta. Una venta suelta
+baja un archivo de **11 de 23 columnas en N/A**, que no sirve para dos cosas: no delata un
+mapeo mal cableado (también daría `N/A`) y no se le puede mostrar a nadie como muestra del
+formato. Tampoco se podría probar el filtro por clave de corrida de CU-004: se resuelve
+contra `tripSeat.trip.id`, así que sin asiento devuelve `EMPTY` siempre. El seed **repara**
+las ventas que dejaron corridas anteriores suyas (las reconoce por `providerPaymentId`);
+las que sembró otra cosa se quedan como estén.
+
+**El `adapter-bcb` mal apuntado es la trampa de este flujo.** Su
+`satellite.reports.base-url` cae por defecto al **API Gateway de develop en AWS**, así que
+un `adapter-bcb` levantado por cualquier otro flujo genera reportes contra un ambiente
+desplegado. El síntoma tarda y engaña: la petición responde `202`, y minutos después el job
+queda `FAILED` con `SYS_001`, porque el 403 que contesta AWS (`Invalid key=value pair in
+Authorization header` — API Gateway espera SigV4 y el adapter manda un `Bearer`) recién
+aparece en el log del adapter. Por eso la URL es el **5.º argumento de
+`start_adapter_bcb`**, con default `http://localhost:3010`, y no una variable exportada:
+un flujo que no corre `apps/reports` falla en seco en local en vez de pegarle a develop.
+`up` además reinicia el `adapter-bcb` siempre, y `status` avisa si el proceso vivo llamó a
+un `execute-api` de AWS.
+
+**Vista para probar a mano** — `./e2e demo reporteo` (`:7790`). No es la pantalla del CMS
+(esa la hace el dev de frontend): es lo mínimo para ejercitar la cadena sin Bruno ni curl.
+Lee el catálogo del adapter y arma los controles con lo que el satélite declara —esconde las
+fechas donde `dateRange` es `NONE`, avisa dónde vaciarlas significa "hoy", pinta un campo por
+filtro y una casilla por columna—, hace el `202` → polling → descarga, y muestra la petición
+y la respuesta crudas al lado. A propósito **no** marca los campos obligatorios como
+`required`: dejar pasar la petición incompleta es lo que permite ver el código real que
+devuelve el backend (`VALIDATION_014`, `VALIDATION_001`, `BIZ_001`…), que es justo lo que el
+CMS tendrá que pintar. `EMPTY` sale como aviso amarillo, no como error: es éxito sin filas.
 
 ## Agregar un flujo
 
@@ -321,6 +449,12 @@ Cada una costó tiempo de depuración en su momento:
 - **`.env` con PEM partido.** Si alguien mete una llave con `sed` cuyo reemplazo
   trae `\n`, sed lo convierte en saltos de línea reales y `docker compose` deja
   de poder leer el `.env`. `up` descarta esas líneas huérfanas.
+
+**`SERVER_PORT` exportado se pega al siguiente servicio.** Levantar dos adapters a mano en
+la misma terminal, cargando los dos archivos de entorno, hace que el segundo herede el
+`SERVER_PORT` del primero: se queda con su puerto y el otro no arranca. El síntoma no es un
+error claro sino un reporte que muere en `FAILED` cinco minutos después, porque nadie
+contesta por NATS. Cada flujo pasa `SERVER_PORT` explícito en el arranque.
 
 ## Notas
 

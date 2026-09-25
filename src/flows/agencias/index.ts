@@ -4,6 +4,7 @@ import { logFile } from '@harness/paths';
 import type { Flow, Probe } from '@harness/types';
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
+import { adminToken } from './admin-token';
 import { cases } from './cases';
 import { AGENCIA, PORTS, SAT_DB } from './scenarios';
 import { seed } from './seed';
@@ -110,13 +111,15 @@ async function dbSnapshot(): Promise<Record<string, unknown>[]> {
     include: { rfcs: { where: { isPrimary: true } }, sessions: true },
   });
   if (!agency) return [];
-  const copia = satSql(`SELECT "nombreComercial" || ' · ' || status FROM "Agencia" WHERE id='${AGENCIA.id}';`);
+  const copia = satSql(`SELECT "name" || ' · ' || status FROM "Agency" WHERE id='${AGENCIA.id}';`);
   return [
     {
-      agencia: agency.name,
+      agency: agency.name,
+      username: agency.rfcs[0]?.username ?? null,
       correo_login: agency.rfcs[0]?.email ?? null,
       status_bcb: agency.status,
-      contrasena_temporal: agency.isTempPassword,
+      // AD11: la contraseña es de la sucursal, no de la agencia.
+      contrasena_temporal: agency.rfcs[0]?.isTempPassword ?? null,
       sesiones_vivas: agency.sessions.length,
       access_expira: agency.sessions[0]?.accessTokenExpiresAt?.toISOString() ?? null,
       copia_satelite: copia || '(no existe)',
@@ -131,5 +134,8 @@ export const flow: Flow = {
   seed,
   probe,
   dbSnapshot,
+  // `./e2e token agencias` — para Bruno, curl o el navegador. Firma con la privada
+  // del leg `adapter-pa` de run/keys/, la misma que usan los casos.
+  adminToken: (expiraEn) => adminToken({ expiraEn }),
   close: closeDb,
 };

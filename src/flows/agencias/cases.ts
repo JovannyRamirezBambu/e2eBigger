@@ -51,15 +51,18 @@ async function http<T = any>(
 type LoginBody = {
   accessToken: string;
   refreshToken: string;
-  agencia: {
+  agency: {
     id: string;
-    nombreComercial: string;
+    name: string;
     email: string;
+    /** Sucursal con la que se entró: desde AD02/AD11 las credenciales son suyas. */
+    branchId: string;
+    username: string;
     status: string;
-    esContrasenaTemporal: boolean;
+    isTempPassword: boolean;
     creditLimit: number;
     currentDebt: number;
-    porcentajeDescuento: number;
+    discountPercent: number;
   };
 };
 
@@ -131,12 +134,12 @@ export const cases: CaseDef[] = [
       t.is('status', 200, r.status, r.text.slice(0, 200));
       t.present('accessToken', r.body?.accessToken);
       t.present('refreshToken', r.body?.refreshToken);
-      t.is('agencia.id = UUID de la agencia', AGENCIA.id, r.body?.agencia?.id);
-      t.is('agencia.nombreComercial', AGENCIA.nombre, r.body?.agencia?.nombreComercial);
-      t.is('agencia.email = correo del login', AGENCIA.email, r.body?.agencia?.email);
-      t.is('agencia.status', 'ACTIVE', r.body?.agencia?.status);
-      t.is('esContrasenaTemporal (el SQL la siembra en false)', false, r.body?.agencia?.esContrasenaTemporal);
-      t.is('porcentajeDescuento como número', 10, r.body?.agencia?.porcentajeDescuento);
+      t.is('agencia.id = UUID de la agencia', AGENCIA.id, r.body?.agency?.id);
+      t.is('agencia.name', AGENCIA.name, r.body?.agency?.name);
+      t.is('agencia.email = correo del login', AGENCIA.email, r.body?.agency?.email);
+      t.is('agencia.status', 'ACTIVE', r.body?.agency?.status);
+      t.is('esContrasenaTemporal (el SQL la siembra en false)', false, r.body?.agency?.isTempPassword);
+      t.is('porcentajeDescuento como número', 10, r.body?.agency?.discountPercent);
 
       if (r.body?.accessToken) {
         const { header, payload } = decodeJwt(r.body.accessToken);
@@ -189,7 +192,7 @@ export const cases: CaseDef[] = [
       const r = await satGet('/auth/me', s.accessToken);
       t.is('status', 200, r.status, r.text.slice(0, 200));
       t.is('id', AGENCIA.id, r.body?.id);
-      t.is('nombreComercial', AGENCIA.nombre, r.body?.nombreComercial);
+      t.is('name', AGENCIA.name, r.body?.name);
     },
   },
   {
@@ -332,35 +335,35 @@ export const cases: CaseDef[] = [
   },
   {
     name: 'a17-sucursales-propias',
-    label: 'GET /agencies/:id/sucursales con el token propio → 200 con la sucursal del RFC de login (AD15)',
+    label: 'GET /agencies/:id/branches con el token propio → 200 con la sucursal del RFC de login (AD15)',
     run: async (t) => {
       const s = await loginOk();
-      const r = await satGet(`/agencies/${AGENCIA.id}/sucursales`, s.accessToken);
+      const r = await satGet(`/agencies/${AGENCIA.id}/branches`, s.accessToken);
       t.is('status', 200, r.status, r.text.slice(0, 200));
       t.assert('trae al menos una sucursal', (r.body?.data?.length ?? 0) >= 1);
       const sucursal = r.body?.data?.[0];
       t.is('rfc de la sucursal', AGENCIA.rfc, sucursal?.rfc);
       t.is('correo de acceso', AGENCIA.email, sucursal?.email);
-      t.is('es la principal', true, sucursal?.esPrincipal);
+      t.is('es la principal', true, sucursal?.isPrimary);
       t.is('status de la sucursal', 'ACTIVE', sucursal?.status);
-      t.is('la sucursal referencia a su agencia', AGENCIA.id, sucursal?.agencia?.id);
+      t.is('la sucursal referencia a su agencia', AGENCIA.id, sucursal?.agency?.id);
     },
   },
   {
     name: 'a18-sucursales-ajenas-prohibidas',
-    label: 'GET /agencies/:id/sucursales con el id de OTRA agencia → 403',
+    label: 'GET /agencies/:id/branches con el id de OTRA agencia → 403',
     run: async (t) => {
       const s = await loginOk();
-      const r = await satGet(`/agencies/${OTRA_AGENCIA_ID}/sucursales`, s.accessToken);
+      const r = await satGet(`/agencies/${OTRA_AGENCIA_ID}/branches`, s.accessToken);
       t.is('status', 403, r.status, r.text.slice(0, 200));
     },
   },
   {
     name: 'a19-busqueda-global-sucursales-prohibida',
-    label: 'GET /sucursales (búsqueda global, AD15) con token de agencia → 403 (solo administración)',
+    label: 'GET /branches (búsqueda global, AD15) con token de agencia → 403 (solo administración)',
     run: async (t) => {
       const s = await loginOk();
-      const r = await satGet('/sucursales', s.accessToken);
+      const r = await satGet('/branches', s.accessToken);
       t.is('status', 403, r.status, r.text.slice(0, 200));
     },
   },
@@ -371,12 +374,12 @@ export const cases: CaseDef[] = [
       const s = await loginOk();
       const r = await satGet(`/agencies/${AGENCIA.id}`, s.accessToken);
       t.is('status', 200, r.status, r.text.slice(0, 200));
-      t.is('totalSucursales', 1, r.body?.totalSucursales);
+      t.is('branchCount', 1, r.body?.branchCount);
       t.is('saldoDisponible = creditLimit - currentDebt',
-        (r.body?.creditLimit ?? 0) - (r.body?.currentDebt ?? 0), r.body?.saldoDisponible);
+        (r.body?.creditLimit ?? 0) - (r.body?.currentDebt ?? 0), r.body?.availableCredit);
       t.is('datos de contacto desde la sucursal principal', AGENCIA.email, r.body?.email);
-      t.present('ciudad de la sucursal principal', r.body?.ciudad);
-      t.assert('las sucursales vienen embebidas', (r.body?.sucursales?.length ?? 0) === 1);
+      t.present('ciudad de la sucursal principal', r.body?.city);
+      t.assert('las sucursales vienen embebidas', (r.body?.branches?.length ?? 0) === 1);
     },
   },
   {
@@ -384,14 +387,14 @@ export const cases: CaseDef[] = [
     label: 'POST /auth/change-password sin Bearer → 401; con refresh token → 401',
     run: async (t) => {
       const sinToken = await http('POST', `${SAT_URL}/auth/change-password`, {
-        body: { contrasenaActual: AGENCIA.password, contrasenaNueva: 'OtraClave2026!' },
+        body: { currentPassword: AGENCIA.password, newPassword: 'OtraClave2026!' },
       });
       t.is('sin Authorization', 401, sinToken.status, sinToken.text.slice(0, 200));
 
       const s = await loginOk();
       const conRefresh = await http('POST', `${SAT_URL}/auth/change-password`, {
         token: s.refreshToken,
-        body: { contrasenaActual: AGENCIA.password, contrasenaNueva: 'OtraClave2026!' },
+        body: { currentPassword: AGENCIA.password, newPassword: 'OtraClave2026!' },
       });
       t.is('con refresh token', 401, conRefresh.status, conRefresh.text.slice(0, 200));
     },
@@ -403,7 +406,7 @@ export const cases: CaseDef[] = [
       const s = await loginOk();
       const r = await http('POST', `${SAT_URL}/auth/change-password`, {
         token: s.accessToken,
-        body: { contrasenaActual: AGENCIA.password, contrasenaNueva: 'corta' },
+        body: { currentPassword: AGENCIA.password, newPassword: 'corta' },
       });
       t.is('status', 400, r.status, r.text.slice(0, 200));
     },
@@ -411,12 +414,12 @@ export const cases: CaseDef[] = [
   // ── Administración: la cadena completa hasta el app `agencies` de BCB ──────
   {
     name: 'a23-catalogos',
-    label: 'Catálogos AD08/AD09 (servicios, tipos de pasajero, estaciones) resueltos en BCB',
+    label: 'Catálogos AD08/AD09 (servicios, tipos de pasajero, stations) resueltos en BCB',
     run: async (t) => {
       for (const [ruta, campos] of [
-        ['/catalogos/servicios', ['id', 'clave', 'nombre']],
-        ['/catalogos/tipos-pasajero', ['id', 'clave', 'nombre']],
-        ['/catalogos/estaciones', ['id', 'nombre', 'nombreCorto', 'numero']],
+        ['/catalogs/services', ['id', 'key', 'shortName', 'fullName']],
+        ['/catalogs/passenger-types', ['id', 'key', 'name']],
+        ['/catalogs/stations', ['id', 'name', 'shortName', 'number']],
       ] as const) {
         const r = await adminGet(ruta);
         t.is(`status ${ruta}`, 200, r.status, r.text.slice(0, 200));
@@ -435,12 +438,12 @@ export const cases: CaseDef[] = [
       t.is('status', 200, r.status, r.text.slice(0, 200));
       const agencia = (r.body?.data ?? []).find((a: any) => a.id === AGENCIA.id);
       t.present('la agencia demo aparece', agencia);
-      t.is('nombreComercial', AGENCIA.nombre, agencia?.nombreComercial);
-      t.assert('trae sus sucursales', (agencia?.sucursales?.length ?? 0) >= 1);
+      t.is('name', AGENCIA.name, agencia?.name);
+      t.assert('trae sus sucursales', (agencia?.branches?.length ?? 0) >= 1);
       t.is(
         'saldoDisponible = creditLimit - currentDebt',
         (agencia?.creditLimit ?? 0) - (agencia?.currentDebt ?? 0),
-        agencia?.saldoDisponible,
+        agencia?.availableCredit,
       );
     },
   },
@@ -448,37 +451,44 @@ export const cases: CaseDef[] = [
     name: 'a25-config-ad09-ad10',
     label: 'AD09/AD10: límite, descuento, tipos de pasajero y de servicio llegan a BCB',
     run: async (t) => {
-      const tipos = await adminGet('/catalogos/tipos-pasajero');
-      const servicios = await adminGet('/catalogos/servicios');
+      const tipos = await adminGet('/catalogs/passenger-types');
+      const servicios = await adminGet('/catalogs/services');
       const tipoId = tipos.body?.[0]?.id;
       const servicioId = servicios.body?.[0]?.id;
 
       const r = await adminPut(`/agencies/${AGENCIA.id}`, {
         creditLimit: 75000,
-        porcentajeDescuento: 12,
-        tiposPasajeroIds: [tipoId],
-        serviciosIds: [servicioId],
+        discountPercent: 12,
+        passengerTypeIds: [tipoId],
+        serviceIds: [servicioId],
       });
 
       t.is('status', 200, r.status, r.text.slice(0, 300));
       t.is('creditLimit', 75000, r.body?.creditLimit);
-      t.is('porcentajeDescuento', 12, r.body?.porcentajeDescuento);
+      t.is('discountPercent', 12, r.body?.discountPercent);
       // El campo se pierde si algún DTO del relay no lo declara: por eso se comprueba
       // el valor de vuelta y no solo el status.
-      t.is('tipos de pasajero configurados', 1, r.body?.tiposPasajero?.length);
-      t.is('tipo de pasajero correcto', tipoId, r.body?.tiposPasajero?.[0]?.id);
-      t.is(
-        'servicios aplicados a la sucursal',
-        servicioId,
-        r.body?.sucursales?.[0]?.servicios?.[0]?.id,
+      t.is('tipos de pasajero configurados', 1, r.body?.passengerTypes?.length);
+      t.is('tipo de pasajero correcto', tipoId, r.body?.passengerTypes?.[0]?.id);
+      // AD09: los tipos de servicio son de la AGENCIA, no de cada sucursal.
+      t.is('servicios de la agencia', 1, r.body?.services?.length);
+      t.is('servicio correcto', servicioId, r.body?.services?.[0]?.id);
+      // El portal pinta el nombre completo ("Primera clase"), no la abreviatura.
+      t.present(
+        'el servicio trae su nombre completo',
+        r.body?.services?.[0]?.fullName,
+      );
+      t.assert(
+        'y las sucursales ya no los traen',
+        !('services' in (r.body?.branches?.[0] ?? {})),
       );
 
       // Se restaura el estado sembrado: otros casos verifican el 10 % y los 50 000.
       await adminPut(`/agencies/${AGENCIA.id}`, {
         creditLimit: 50000,
-        porcentajeDescuento: 10,
-        tiposPasajeroIds: [],
-        serviciosIds: [],
+        discountPercent: 10,
+        passengerTypeIds: [],
+        serviceIds: [],
       });
     },
   },
@@ -487,16 +497,16 @@ export const cases: CaseDef[] = [
     label: 'AD03: los datos de contacto se enrutan a la sucursal principal',
     run: async (t) => {
       const r = await adminPut(`/agencies/${AGENCIA.id}`, {
-        telefono: '2225556677',
-        ciudad: 'Cholula',
+        phone: '2225556677',
+        city: 'Cholula',
       });
       t.is('status', 200, r.status, r.text.slice(0, 300));
-      t.is('telefono', '2225556677', r.body?.telefono);
-      t.is('ciudad', 'Cholula', r.body?.ciudad);
-      t.is('la sucursal principal quedó actualizada', '2225556677', r.body?.sucursales?.[0]?.telefono);
+      t.is('phone', '2225556677', r.body?.phone);
+      t.is('city', 'Cholula', r.body?.city);
+      t.is('la sucursal principal quedó actualizada', '2225556677', r.body?.branches?.[0]?.phone);
 
       // Se deja como estaba para no arrastrar estado entre corridas.
-      await adminPut(`/agencies/${AGENCIA.id}`, { telefono: '2220000000', ciudad: 'Puebla' });
+      await adminPut(`/agencies/${AGENCIA.id}`, { phone: '2220000000', city: 'Puebla' });
     },
   },
   {
@@ -504,39 +514,39 @@ export const cases: CaseDef[] = [
     label: 'AD11→AD12→AD14→AD13: alta, edición, desactivación y baja de una sucursal',
     run: async (t) => {
       const rfc = rfcUnico('SUC');
-      const alta = await adminPost(`/agencies/${AGENCIA.id}/sucursales`, {
+      const alta = await adminPost(`/agencies/${AGENCIA.id}/branches`, {
         rfc,
-        razonSocial: 'Sucursal E2E SA de CV',
+        businessName: 'Sucursal E2E SA de CV',
         email: `suc.${Date.now()}@example.com`,
-        telefono: '2221112233',
-        direccion: 'Blvd. Atlixco 100',
-        ciudad: 'Puebla',
+        phone: '2221112233',
+        address: 'Blvd. Atlixco 100',
+        city: 'Puebla',
       });
       t.is('AD11 status', 201, alta.status, alta.text.slice(0, 300));
       t.is('AD11 rfc', rfc, alta.body?.rfc);
-      t.is('AD11 ciudad', 'Puebla', alta.body?.ciudad);
+      t.is('AD11 ciudad', 'Puebla', alta.body?.city);
       t.is('AD11 nace activa', 'ACTIVE', alta.body?.status);
-      t.is('AD11 no es la principal', false, alta.body?.esPrincipal);
+      t.is('AD11 no es la principal', false, alta.body?.isPrimary);
       const id = alta.body?.id;
 
-      const edicion = await adminPut(`/agencies/${AGENCIA.id}/sucursales/${id}`, {
-        telefono: '2229998877',
-        ciudad: 'Cholula',
+      const edicion = await adminPut(`/agencies/${AGENCIA.id}/branches/${id}`, {
+        phone: '2229998877',
+        city: 'Cholula',
       });
       t.is('AD12 status', 200, edicion.status, edicion.text.slice(0, 300));
-      t.is('AD12 telefono', '2229998877', edicion.body?.telefono);
+      t.is('AD12 telefono', '2229998877', edicion.body?.phone);
       t.is('AD12 el RFC no cambia', rfc, edicion.body?.rfc);
 
-      const baja = await adminPatch(`/agencies/${AGENCIA.id}/sucursales/${id}/status`, {
+      const baja = await adminPatch(`/agencies/${AGENCIA.id}/branches/${id}/status`, {
         status: 'INACTIVE',
       });
       t.is('AD14 status', 200, baja.status, baja.text.slice(0, 300));
       t.is('AD14 quedó inactiva', 'INACTIVE', baja.body?.status);
 
-      const borrado = await adminDelete(`/agencies/${AGENCIA.id}/sucursales/${id}`);
+      const borrado = await adminDelete(`/agencies/${AGENCIA.id}/branches/${id}`);
       t.is('AD13 status', 204, borrado.status, borrado.text.slice(0, 200));
 
-      const listado = await adminGet(`/agencies/${AGENCIA.id}/sucursales`);
+      const listado = await adminGet(`/agencies/${AGENCIA.id}/branches`);
       t.assert(
         'AD13 ya no aparece en el listado',
         !(listado.body?.data ?? []).some((x: any) => x.id === id),
@@ -544,14 +554,70 @@ export const cases: CaseDef[] = [
     },
   },
   {
+    name: 'a39-rfc-se-libera-al-borrar',
+    label: 'AD13: el RFC de una sucursal dada de baja se puede volver a registrar',
+    run: async (t) => {
+      /*
+       * Reportado desde el admin: borrabas un RFC y al recapturarlo saltaba un error de
+       * unicidad de la base. Los índices de rfc/usuario/correo eran totales —no ignoraban
+       * el borrado lógico— y la fila muerta seguía ocupando esos valores, en BCB y en la
+       * copia del satélite. Este caso recorre la cadena completa, que es donde se ve.
+       */
+      const rfc = rfcUnico('LIB');
+      const correo = `libre.${Date.now()}@example.com`;
+      const usuario = `libre.${Date.now()}`;
+      const cuerpo = {
+        rfc,
+        businessName: 'Sucursal Reutilizable SA de CV',
+        email: correo,
+        username: usuario,
+        phone: '2224445566',
+        address: 'Av. Reforma 200',
+        city: 'Puebla',
+      };
+
+      const alta = await adminPost(`/agencies/${AGENCIA.id}/branches`, cuerpo);
+      t.is('alta inicial', 201, alta.status, alta.text.slice(0, 300));
+
+      const borrado = await adminDelete(
+        `/agencies/${AGENCIA.id}/branches/${alta.body?.id}`,
+      );
+      t.is('se da de baja', 204, borrado.status, borrado.text.slice(0, 200));
+
+      // Lo que fallaba: el mismo RFC, el mismo correo y el mismo usuario, otra vez.
+      const realta = await adminPost(`/agencies/${AGENCIA.id}/branches`, cuerpo);
+      t.is(
+        'el mismo RFC se vuelve a registrar',
+        201,
+        realta.status,
+        realta.text.slice(0, 300),
+      );
+      t.is('y conserva su RFC real', rfc, realta.body?.rfc);
+
+      // Pero dos vivas con el mismo RFC siguen prohibidas.
+      const duplicada = await adminPost(`/agencies/${AGENCIA.id}/branches`, {
+        ...cuerpo,
+        email: `otro.${Date.now()}@example.com`,
+        username: `otro.${Date.now()}`,
+      });
+      t.assert(
+        'duplicar el RFC entre sucursales vivas sigue prohibido',
+        duplicada.status === 409 || duplicada.status === 400,
+        `status=${duplicada.status} ${duplicada.text.slice(0, 160)}`,
+      );
+
+      await adminDelete(`/agencies/${AGENCIA.id}/branches/${realta.body?.id}`);
+    },
+  },
+  {
     name: 'a28-no-borrar-unica-activa',
     label: 'AD13: la única sucursal activa de la agencia no se puede eliminar',
     run: async (t) => {
-      const listado = await adminGet(`/agencies/${AGENCIA.id}/sucursales`);
+      const listado = await adminGet(`/agencies/${AGENCIA.id}/branches`);
       const activas = (listado.body?.data ?? []).filter((x: any) => x.status === 'ACTIVE');
       t.is('la agencia demo tiene exactamente una sucursal activa', 1, activas.length);
 
-      const r = await adminDelete(`/agencies/${AGENCIA.id}/sucursales/${activas[0]?.id}`);
+      const r = await adminDelete(`/agencies/${AGENCIA.id}/branches/${activas[0]?.id}`);
       t.is('status', 400, r.status, r.text.slice(0, 300));
       t.assert('el motivo es la última activa', r.text.includes('LAST_ACTIVE_RFC'));
     },
@@ -560,12 +626,12 @@ export const cases: CaseDef[] = [
     name: 'a29-rfc-duplicado',
     label: 'AD11: un RFC ya registrado responde 409, no 500',
     run: async (t) => {
-      const r = await adminPost(`/agencies/${AGENCIA.id}/sucursales`, {
+      const r = await adminPost(`/agencies/${AGENCIA.id}/branches`, {
         rfc: AGENCIA.rfc,
-        razonSocial: 'Duplicada SA de CV',
+        businessName: 'Duplicada SA de CV',
         email: `dup.${Date.now()}@example.com`,
-        telefono: '2221112233',
-        direccion: 'Calle Duplicada 1',
+        phone: '2221112233',
+        address: 'Calle Duplicada 1',
       });
       t.is('status', 409, r.status, r.text.slice(0, 300));
     },
@@ -575,7 +641,7 @@ export const cases: CaseDef[] = [
     label: 'AD06/AD15: la búsqueda ignora acentos y alcanza a las sucursales',
     run: async (t) => {
       // La sucursal demo está en 'Puebla'; se busca con acento a propósito.
-      const sucursales = await adminGet('/sucursales?search=Pu%C3%A9bla');
+      const sucursales = await adminGet('/branches?search=Pu%C3%A9bla');
       t.is('status sucursales', 200, sucursales.status, sucursales.text.slice(0, 200));
       t.assert(
         'encuentra la sucursal demo pese al acento',
@@ -594,23 +660,23 @@ export const cases: CaseDef[] = [
     name: 'a31-cortes-ad07',
     label: 'AD07: historial de cortes paginado y corte con detalle boleto por boleto',
     run: async (t) => {
-      const historial = await adminGet(`/agencies/${AGENCIA.id}/cortes`);
+      const historial = await adminGet(`/agencies/${AGENCIA.id}/settlements`);
       t.is('status historial', 200, historial.status, historial.text.slice(0, 200));
       t.assert('data es una lista', Array.isArray(historial.body?.data));
-      t.present('trae paginación', historial.body?.paginacion);
+      t.present('trae paginación', historial.body?.pagination);
 
-      const corte = await adminPost(`/agencies/${AGENCIA.id}/corte`, {
+      const corte = await adminPost(`/agencies/${AGENCIA.id}/settlements`, {
         from: '2026-01-01',
         to: '2026-12-31',
       });
       t.is('status corte', 201, corte.status, corte.text.slice(0, 300));
       t.present('el corte trae id', corte.body?.id);
 
-      const detalle = await adminGet(`/agencies/${AGENCIA.id}/cortes/${corte.body?.id}`);
+      const detalle = await adminGet(`/agencies/${AGENCIA.id}/settlements/${corte.body?.id}`);
       t.is('status detalle', 200, detalle.status, detalle.text.slice(0, 200));
       t.is('el detalle es del corte pedido', corte.body?.id, detalle.body?.id);
-      t.assert('trae el desglose por boleto', Array.isArray(detalle.body?.detalle));
-      t.is('totalBoletos coincide con el desglose', detalle.body?.detalle?.length, detalle.body?.totalBoletos);
+      t.assert('trae el desglose por boleto', Array.isArray(detalle.body?.charges));
+      t.is('totalBoletos coincide con el desglose', detalle.body?.charges?.length, detalle.body?.totalTickets);
     },
   },
   {
@@ -620,24 +686,28 @@ export const cases: CaseDef[] = [
       const rfc = rfcUnico('NVA');
       const email = `nueva.${Date.now()}@example.com`;
       const r = await adminPost('/agencies', {
-        nombreComercial: 'Agencia Nueva E2E',
-        razonSocial: 'Agencia Nueva E2E SA de CV',
-        rfc,
-        email,
-        telefono: '2223334455',
-        direccion: 'Av. Nueva 1',
-        ciudad: 'Atlixco',
+        name: 'Agencia Nueva E2E',
         creditLimit: 10000,
-        porcentajeDescuento: 5,
+        discountPercent: 5,
+        branches: [
+          {
+            rfc,
+            businessName: 'Agencia Nueva E2E SA de CV',
+            email,
+            phone: '2223334455',
+            address: 'Av. Nueva 1',
+            city: 'Atlixco',
+          },
+        ],
       });
 
       t.is('status', 201, r.status, r.text.slice(0, 300));
       t.present('devuelve el id de BCB', r.body?.id);
       t.is('creditLimit', 10000, r.body?.creditLimit);
-      t.is('ciudad desde la sucursal principal', 'Atlixco', r.body?.ciudad);
-      t.is('nace con una sucursal', 1, r.body?.totalSucursales);
-      t.is('la sucursal es la principal', true, r.body?.sucursales?.[0]?.esPrincipal);
-      t.is('y tiene el RFC capturado', rfc, r.body?.sucursales?.[0]?.rfc);
+      t.is('ciudad desde la sucursal principal', 'Atlixco', r.body?.city);
+      t.is('nace con una sucursal', 1, r.body?.branchCount);
+      t.is('la sucursal es la principal', true, r.body?.branches?.[0]?.isPrimary);
+      t.is('y tiene el RFC capturado', rfc, r.body?.branches?.[0]?.rfc);
 
       // AD04: se elimina para no dejar basura entre corridas (sin deuda ni boletos, debe poder).
       const borrado = await adminDelete(`/agencies/${r.body?.id}`);
@@ -653,7 +723,7 @@ export const cases: CaseDef[] = [
 
       const cambio = await http('POST', `${SAT_URL}/auth/change-password`, {
         token: s.accessToken,
-        body: { contrasenaActual: AGENCIA.password, contrasenaNueva: NUEVA },
+        body: { currentPassword: AGENCIA.password, newPassword: NUEVA },
       });
       t.is('status del cambio', 204, cambio.status, cambio.text.slice(0, 200));
 
@@ -665,17 +735,352 @@ export const cases: CaseDef[] = [
       t.is(
         'y ya no está marcada como temporal',
         false,
-        conNueva.body?.agencia?.esContrasenaTemporal,
+        conNueva.body?.agency?.isTempPassword,
       );
 
       // Se deja como estaba: el resto de los casos y el seed usan la contraseña original.
       const revertir = await http('POST', `${SAT_URL}/auth/change-password`, {
         token: conNueva.body?.accessToken,
-        body: { contrasenaActual: NUEVA, contrasenaNueva: AGENCIA.password },
+        body: { currentPassword: NUEVA, newPassword: AGENCIA.password },
       });
       t.is('se restaura la contraseña sembrada', 204, revertir.status, revertir.text.slice(0, 200));
       const final = await login();
       t.is('el login original vuelve a funcionar', 200, final.status);
+    },
+  },
+  {
+    name: 'a34-alta-agencia-varios-rfc',
+    label: 'AD02: alta de agencia con dos RFC de una vez, como pide el diseño',
+    run: async (t) => {
+      const sello = Date.now();
+      const rfcUno = rfcUnico('SLO');
+      const rfcDos = rfcUnico('DFN');
+      const correoUno = `operaciones.${sello}@example.com`;
+      const correoDos = `frias.${sello}@example.com`;
+
+      const r = await adminPost('/agencies', {
+        name: 'Soluciones Logísticas del Occidente',
+        creditLimit: 80000,
+        discountPercent: 12,
+        branches: [
+          {
+            rfc: rfcUno,
+            businessName: 'Soluciones Logísticas del Occidente S.A. de C.V.',
+            email: correoUno,
+            phone: '3341237788',
+            address: 'C. Eligio Ancona 145, CDMX',
+            city: 'Ciudad de México',
+            isPrimary: true,
+          },
+          {
+            rfc: rfcDos,
+            businessName: 'Distribuciones Frías del Occidente',
+            email: correoDos,
+            phone: '3341237788',
+            address: 'C. Eligio Ancona 145, CDMX',
+            city: 'Ciudad de México',
+          },
+        ],
+      });
+
+      t.is('status', 201, r.status, r.text.slice(0, 300));
+      t.is('nace con las dos sucursales', 2, r.body?.branchCount);
+
+      const porRfc = Object.fromEntries(
+        (r.body?.branches ?? []).map((s: any) => [s.rfc, s]),
+      );
+      // Cada RFC conserva lo suyo: es justo lo que se perdía cuando los DTO de
+      // relay solo declaraban `rfc` e `isPrimary`.
+      t.is('la primera conserva su correo', correoUno, porRfc[rfcUno]?.email);
+      t.is(
+        'la segunda conserva su razón social',
+        'Distribuciones Frías del Occidente',
+        porRfc[rfcDos]?.businessName,
+      );
+      t.is(
+        'exactamente una es la principal',
+        1,
+        (r.body?.branches ?? []).filter((s: any) => s.isPrimary).length,
+      );
+      t.is('y es la marcada', true, porRfc[rfcUno]?.isPrimary);
+      t.is(
+        'los datos de contacto de la agencia salen de la principal',
+        correoUno,
+        r.body?.email,
+      );
+
+      // Las dos pueden iniciar sesión: el correo de cualquiera es identificador.
+      const listado = await adminGet(`/agencies/${r.body?.id}/branches`);
+      t.is('ambas quedan vivas', 2, listado.body?.data?.length);
+
+      const borrado = await adminDelete(`/agencies/${r.body?.id}`);
+      t.is('se elimina con sus dos sucursales', 204, borrado.status, borrado.text.slice(0, 200));
+    },
+  },
+  {
+    name: 'a35-sin-limite-de-credito',
+    label: 'AD09: la casilla "Sin límite de crédito" deja el tope en null y no bloquea la venta',
+    run: async (t) => {
+      const sinTope = await adminPut(`/agencies/${AGENCIA.id}`, {
+        unlimitedCredit: true,
+      });
+      t.is('status', 200, sinTope.status, sinTope.text.slice(0, 300));
+      t.is('creditLimit queda en null', null, sinTope.body?.creditLimit);
+      // Sin tope no hay disponible que calcular.
+      t.is('saldoDisponible también', null, sinTope.body?.availableCredit);
+
+      // La copia local del satélite refleja el null, no un 0.
+      const detalle = await adminGet(`/agencies/${AGENCIA.id}`);
+      t.is('el detalle lo confirma', null, detalle.body?.creditLimit);
+
+      const conTope = await adminPut(`/agencies/${AGENCIA.id}`, {
+        creditLimit: 50000,
+        unlimitedCredit: false,
+      });
+      t.is('vuelve a tener tope', 50000, conTope.body?.creditLimit);
+      t.is(
+        'y el disponible se vuelve a calcular',
+        50000 - (conTope.body?.currentDebt ?? 0),
+        conTope.body?.availableCredit,
+      );
+    },
+  },
+  {
+    name: 'a36-desactivar-corta-la-sesion',
+    label: 'AD05: desactivar la agencia corta el acceso en el momento, no cuando expire el token',
+    run: async (t) => {
+      const s = await loginOk();
+      const antes = await satGet('/auth/me', s.accessToken);
+      t.is('la agencia entra con su token', 200, antes.status, antes.text.slice(0, 200));
+
+      // Apagar el interruptor desde el portal, por la cadena real.
+      const apagar = await adminPatch(`/agencies/${AGENCIA.id}/status`, { status: 'INACTIVE' });
+      t.is('status del cambio', 200, apagar.status, apagar.text.slice(0, 300));
+      t.is('la agencia queda inactiva', 'INACTIVE', apagar.body?.status);
+
+      try {
+        // BCB borra la sesión: el refresh muere aunque el token siga sin expirar.
+        t.is('BCB se quedó sin sesiones vivas', 0, (await sessions()).length);
+
+        const renovar = await refresh(s.refreshToken);
+        t.is('el refresh ya no sirve', 401, renovar.status, renovar.text.slice(0, 200));
+
+        // Y el access token que la agencia tiene en la mano deja de abrir.
+        //
+        // 401 o 403 según qué chequeo dispare primero, y los dos cortan el acceso:
+        // 403 lo daba AgencyStatusGuard leyendo la copia local ("agencia inactiva").
+        // Desde `6dd5b7e feat(agencies): validar sesión de venta directo en BCB`, el
+        // satélite valida la sesión contra BCB antes de eso, y como inactivar borra la
+        // sesión en BCB, lo que sale primero es un 401 "sesión no encontrada". Lo que se
+        // prueba acá es que el token deje de abrir, no cuál de los dos guardias ganó.
+        const cortado = (status: number) => status === 401 || status === 403;
+
+        const despues = await satGet('/auth/me', s.accessToken);
+        t.is('el access token deja de abrir', true, cortado(despues.status),
+          `status=${despues.status} ${despues.text.slice(0, 160)}`);
+
+        const propio = await satGet(`/agencies/${AGENCIA.id}`, s.accessToken);
+        t.is('tampoco sus propios datos', true, cortado(propio.status),
+          `status=${propio.status} ${propio.text.slice(0, 160)}`);
+      } finally {
+        const prender = await adminPatch(`/agencies/${AGENCIA.id}/status`, { status: 'ACTIVE' });
+        t.is('se vuelve a activar', 200, prender.status, prender.text.slice(0, 200));
+      }
+
+      const otra = await login();
+      t.is('y puede volver a entrar', 200, otra.status, otra.text.slice(0, 200));
+    },
+  },
+  {
+    name: 'a37-credenciales-por-sucursal',
+    label: 'AD02/AD11: cada sucursal tiene su usuario y su contraseña, independientes entre sí',
+    run: async (t) => {
+      const sello = Date.now();
+      const alta = await adminPost('/agencies', {
+        name: `Agencia Credenciales ${sello}`,
+        branches: [
+          {
+            rfc: rfcUnico('CRA'),
+            businessName: 'Credenciales Uno S.A. de C.V.',
+            username: `matriz.${sello}`,
+            email: `matriz.${sello}@example.com`,
+            phone: '5512340001',
+            address: 'Av. Uno 1, CDMX',
+            city: 'Ciudad de México',
+            isPrimary: true,
+          },
+          {
+            rfc: rfcUnico('CRB'),
+            businessName: 'Credenciales Dos S.A. de C.V.',
+            username: `sucursal.${sello}`,
+            email: `sucursal.${sello}@example.com`,
+            phone: '2229990002',
+            address: 'Blvd. Dos 2, Puebla',
+            city: 'Puebla',
+            isPrimary: false,
+          },
+        ],
+      });
+      t.is('status', 201, alta.status, alta.text.slice(0, 400));
+
+      const agencyId: string = alta.body?.id;
+      const sucursales = (alta.body?.branches ?? []) as {
+        id: string;
+        username: string;
+        email: string;
+      }[];
+      t.is('nacen las dos sucursales', 2, sucursales.length);
+      t.is(
+        'cada una conserva su nombre de usuario',
+        `matriz.${sello},sucursal.${sello}`,
+        sucursales
+          .map((x) => x.username)
+          .sort()
+          .join(','),
+      );
+
+      try {
+        // BCB genera una contraseña DISTINTA por sucursal, así que se leen de la base:
+        // por diseño no salen en la respuesta, solo viajan por correo.
+        const db = bcbDb();
+        const filas = await db.agencyRfc.findMany({
+          where: { agencyId: agencyId },
+          select: { id: true, username: true, passwordHash: true },
+        });
+        t.assert(
+          'cada sucursal guarda su propio hash',
+          new Set(filas.map((f) => f.passwordHash)).size === 2,
+        );
+
+        // Se fija una contraseña conocida por sucursal para poder entrar con cada una.
+        const hash =
+          '$2b$12$HDNcRuUcQ0o3P.sij7.JP.nzxqpQS28h5WQrUuXXFoP4wmL2r6Cia';
+        await db.agencyRfc.updateMany({
+          where: { agencyId: agencyId },
+          data: { passwordHash: hash, isTempPassword: true },
+        });
+
+        const conCorreo = await login(`matriz.${sello}@example.com`, 'AgenciaDemo2026!');
+        t.is('entra con el correo', 200, conCorreo.status, conCorreo.text.slice(0, 200));
+
+        // El DCU llama credenciales a "Usuario y Contraseña": el nombre de usuario
+        // también abre, porque es único en toda la tabla.
+        const conUsuario = await login(`sucursal.${sello}`, 'AgenciaDemo2026!');
+        t.is('y también con el nombre de usuario', 200, conUsuario.status, conUsuario.text.slice(0, 200));
+        t.is(
+          'el perfil dice con qué sucursal entró',
+          `sucursal.${sello}`,
+          conUsuario.body?.agency?.username,
+        );
+
+        // Las dos sesiones conviven: antes la sesión era una por agencia y la segunda
+        // entrada echaba a la primera.
+        const vivas = await db.agencySession.count({
+          where: { agencyId: agencyId },
+        });
+        t.is('las dos sesiones conviven', 2, vivas);
+
+        // Cambiar la contraseña de una NO toca la de la otra.
+        const cambio = await http('POST', `${SAT_URL}/auth/change-password`, {
+          token: conCorreo.body.accessToken,
+          body: { currentPassword: 'AgenciaDemo2026!', newPassword: 'OtraClave2026!' },
+        });
+        t.is('cambia su contraseña', 204, cambio.status, cambio.text.slice(0, 200));
+
+        const otraSigue = await login(`sucursal.${sello}`, 'AgenciaDemo2026!');
+        t.is('la otra sucursal conserva la suya', 200, otraSigue.status, otraSigue.text.slice(0, 200));
+
+        const yaNo = await login(`matriz.${sello}@example.com`, 'AgenciaDemo2026!');
+        t.is('y la que cambió ya no entra con la anterior', 401, yaNo.status);
+      } finally {
+        await adminDelete(`/agencies/${agencyId}`);
+      }
+    },
+  },
+  {
+    name: 'a38-ventas-fecha-de-corrida-y-total',
+    label: 'AD08: el reporte trae la FECHA DE CORRIDA y el total de todo lo filtrado, no el de la página',
+    run: async (t) => {
+      const db = bcbDb();
+      const sello = Date.now();
+
+      // Cadena mínima para que exista un cargo: un viaje ya sembrado, un asiento, una
+      // orden y su boleto. El cargo exige orderItemId, no se puede inventar suelto.
+      // Se usa la salida que el viaje YA tiene, sin tocarla: Trip tiene único
+      // (routeId, departure) y forzarle una fecha fija choca con otro viaje de la ruta.
+      const trip = await db.trip.findFirst({ select: { id: true, departure: true } });
+      if (!trip) throw new Error('no hay Trip sembrado en BCB');
+      const salida = trip.departure;
+
+      const creados: string[] = [];
+      const importes: [number, number] = [250.5, 749.5];
+
+      try {
+        for (const [i, importe] of importes.entries()) {
+          const seat = await db.tripSeat.create({
+            data: { number: 900 + i, tripId: trip.id },
+            select: { id: true },
+          });
+          const order = await db.order.create({
+            data: {
+              type: 'ONE_WAY',
+              subtotal: importe,
+              total: importe,
+            },
+            select: { id: true },
+          });
+          const item = await db.orderItem.create({
+            data: {
+              ticketNumber: `E2E-${sello}-${i}`,
+              basePrice: importe,
+              totalPrice: importe,
+              orderId: order.id,
+              tripSeatId: seat.id,
+            },
+            select: { id: true },
+          });
+          const cargo = await db.agencyCharge.create({
+            data: {
+              amount: importe,
+              agencyId: AGENCIA.id,
+              orderItemId: item.id,
+            },
+            select: { id: true },
+          });
+          creados.push(cargo.id);
+        }
+
+        // limit=1 a propósito: el total NO puede ser el de la página.
+        const r = await adminGet(`/agencies/${AGENCIA.id}/sales?page=1&limit=1`);
+        t.is('status', 200, r.status, r.text.slice(0, 300));
+        t.is('la página trae una sola fila', 1, r.body?.data?.length);
+        t.is('pero el total cuenta las dos', 2, r.body?.pagination?.totalCount);
+        t.is('el importe total es de todo lo filtrado', 1000, r.body?.totalAmount);
+
+        t.is(
+          'la fila trae la fecha de CORRIDA',
+          salida.toISOString(),
+          r.body?.data?.[0]?.departureAt,
+        );
+        // Y no es la de venta: son dos fechas distintas y la tabla pinta la de salida.
+        t.assert(
+          'que no es la fecha de venta',
+          r.body?.data?.[0]?.departureAt !== r.body?.data?.[0]?.soldAt,
+        );
+
+        // El filtro por fecha acota el total, no solo la página.
+        const vacio = await adminGet(
+          `/agencies/${AGENCIA.id}/sales?page=1&limit=20&from=2020-01-01&to=2020-12-31`,
+        );
+        t.is('sin cargos en el rango', 0, vacio.body?.data?.length);
+        t.is('el total del rango vacío es 0', 0, vacio.body?.totalAmount);
+      } finally {
+        await db.agencyCharge.deleteMany({ where: { id: { in: creados } } });
+        await db.orderItem.deleteMany({
+          where: { ticketNumber: { startsWith: `E2E-${sello}-` } },
+        });
+        await db.tripSeat.deleteMany({ where: { number: { in: [900, 901] } } });
+      }
     },
   },
 ];

@@ -49,4 +49,10 @@ export type Flow = {
   beforeCases?: () => Promise<void>;
   /** Se llama siempre al terminar, pase lo que pase. */
   close?: () => Promise<void>;
+  /**
+   * Token para pegarle a mano al satélite (Bruno, curl, el navegador). Lo firma el
+   * flujo con sus propias llaves de `run/keys/`, las mismas que usan las pruebas.
+   * Solo local: esas llaves no existen en ningún ambiente real.
+   */
+  adminToken?: (expiraEnSegundos?: number) => string;
 };

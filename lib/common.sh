@@ -192,8 +192,14 @@ ensure_ui_build() {
 # vive acá y no en un flujo. Quien lo levante configura las URLs de los dos
 # satélites de BCB —el app `bcb` y el app `webhooks`, que son distintos— porque el
 # proceso es uno solo y el segundo flujo en arrancar no lo reinicia.
-start_adapter_bcb() { # start_adapter_bcb <repo_main> <url_bcb> <url_webhooks> <leg>
-  local repo_main="$1" url_bcb="$2" url_webhooks="$3" leg="$4"
+# El 5.º argumento (app `reports` de BCB) es opcional y su omisión NO es inocua: sin él,
+# `satellite.reports.base-url` cae a su default, que es el API Gateway de **develop** en AWS.
+# Un flujo que no corre apps/reports igual debe apuntar a localhost para fallar en seco en
+# vez de pegarle a un ambiente desplegado. El síntoma de no hacerlo es malo de rastrear: el
+# job queda FAILED/SYS_001 minutos después, con un 403 de AWS ("Invalid key=value pair in
+# Authorization header") porque API Gateway espera SigV4 y el adapter manda un Bearer.
+start_adapter_bcb() { # start_adapter_bcb <repo_main> <url_bcb> <url_webhooks> <leg> [url_reports]
+  local repo_main="$1" url_bcb="$2" url_webhooks="$3" leg="$4" url_reports="${5:-http://localhost:3010}"
   if is_running adapter-bcb; then
     dim "   adapter-bcb ya corriendo"
     return 0
@@ -213,6 +219,7 @@ start_adapter_bcb() { # start_adapter_bcb <repo_main> <url_bcb> <url_webhooks> <
     JWT_BYPASS=true BCB_MULTI_ISSUER_AUTH_ENABLED=false \
     BCB_SATELLITE_URL="$url_bcb" \
     BCB_WEBHOOKS_SATELLITE_URL="$url_webhooks" \
+    SATELLITE_REPORTS_URL="$url_reports" \
     BCB_AUTH_PRIVATE_KEY_SECRET_KEY_VALUE="{\"privateKey\":\"$(pem_escaped "$(key_path "$leg-private-pkcs8.pem")")\"}" \
     BCB_AUTH_SUBJECT=adapter-bcb \
     OTLP_TRACES_ENABLED=false \

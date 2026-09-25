@@ -95,9 +95,9 @@ flow_up() {
   ( cd "$REPO_BCB" && pnpm exec prisma generate >/dev/null 2>&1 ) || die "prisma generate (BCB) falló"
   ok "esquema al día ($(bcb_sql "SELECT count(*) FROM _prisma_migrations;") migraciones) y client regenerado"
   local uniq
-  uniq=$(bcb_sql "SELECT count(*) FROM pg_indexes WHERE tablename='AgencySession' AND indexname='AgencySession_agencyId_key';")
-  [ "$uniq" = "1" ] || die "falta el índice único AgencySession_agencyId_key: ¿la rama de BCB es feat/agency-portal-login?"
-  ok "AgencySession.agencyId es único (una sesión viva por agencia)"
+  uniq=$(bcb_sql "SELECT count(*) FROM pg_indexes WHERE tablename='AgencySession' AND indexname='AgencySession_agencyRfcId_key';")
+  [ "$uniq" = "1" ] || die "falta el índice único AgencySession_agencyRfcId_key: ¿la rama de BCB trae la migración de credenciales por sucursal?"
+  ok "AgencySession.agencyRfcId es único (una sesión viva por sucursal)"
   if [ "$(bcb_sql "SELECT count(*) FROM \"State\";")" = "0" ]; then
     ( cd "$REPO_BCB" && DATABASE_URL="$BCB_DB_URL" pnpm prisma:local:db:seed >/dev/null 2>&1 ) \
       || die "el seed oficial de catálogos de BCB falló"
@@ -118,13 +118,19 @@ flow_up() {
   # deny-by-default (@AgencyAccess) a esos tokens.
   # SECRET_PEM_PORTALAGENCIAS_JWT_PRIVATE_KEY es la privada del leg portal-sat, con la que
   # el satélite FIRMA sus llamadas salientes al adapter. Su pública es el JWT_PUBLIC_KEY con
-  # el que arranca adapter-portalagencias: sin esto, todo /agencies/** da 401 (las tres
-  # rutas de login son la excepción, son públicas en el adapter).
-  python3 - "$REPO_SAT/.env" "$SAT_DB_URL" "$PORT_SAT" "http://localhost:$PORT_ADAPTER_PA" \
+  # el que arranca adapter-portalagencias: sin esto, todo /portalagencias/agencies/** da 401
+  # (las rutas de login son la excepción, son públicas en el adapter). La base INCLUYE el
+  # prefijo /portalagencias, igual que en dev detrás del balanceador.
+  # BCB_AUTH_URL / BCB_COMMERCE_URL / BCB_CLIENTS_URL: el módulo de venta del portal
+  # (BcbAgencySessionService, BcbSalesService) las exige EN EL CONSTRUCTOR, así que sin
+  # ellas el satélite no arranca — aunque este flujo todavía no ejercite la venta.
+  # `auth` sí lo levanta el harness; `commerce` y `clients` no, y sus puertos quedan
+  # apuntados para cuando un flujo los necesite.
+  python3 - "$REPO_SAT/.env" "$SAT_DB_URL" "$PORT_SAT" "http://localhost:$PORT_ADAPTER_PA/portalagencias" \
     "$(b64 "$(key_path "$LEG_ADAPTER_PA-public.pem")")" "$(b64 "$(key_path "$LEG_AGENCY-public.pem")")" \
-    "$(key_path "$LEG_SAT_IN-private-pkcs8.pem")" <<'PY'
+    "$(key_path "$LEG_SAT_IN-private-pkcs8.pem")" "http://localhost:$PORT_BCB_AUTH" <<'PY'
 import sys, re
-path, dburl, port, adapter, pub_adapter, pub_agency, priv_sat = sys.argv[1:8]
+path, dburl, port, adapter, pub_adapter, pub_agency, priv_sat, bcb_auth = sys.argv[1:9]
 vals = {
     'PORT': port,
     'NODE_ENV': 'development',
@@ -135,6 +141,9 @@ vals = {
     'JWT_PUBLIC_KEY_BCB_AGENCY': pub_agency,
     'SECRET_PEM_PORTALAGENCIAS_JWT_PRIVATE_KEY': priv_sat,
     'ADAPTER_JWT_ISSUER': 'portal-agencias-api',
+    'BCB_AUTH_URL': bcb_auth,
+    'BCB_COMMERCE_URL': 'http://localhost:3014/commerce',
+    'BCB_CLIENTS_URL': 'http://localhost:3015/clients',
 }
 seen, out = set(), []
 for ln in open(path).read().splitlines():
@@ -190,37 +199,38 @@ PY
   # Solo se sustituye SecretManagerService: devuelve el secreto del rol agency como JSON
   # {privateKey, kid, iss} (igual que en AWS). Ojo: NO se pasan JWT_AGENCY_ISS/KID por
   # entorno a propósito — así se prueba que BCB los toma del secreto.
+  # Se reinicia siempre, como el satélite: son los apps que se están escribiendo y
+  # reutilizar el proceso hacía correr las pruebas contra el código anterior (una ruta
+  # nueva daba 404 y un campo nuevo del DTO daba 400 "should not exist").
   if is_running bcb-auth; then
-    dim "   app auth ya corriendo"
-  else
-    stop_bg bcb-auth
-    ensure_port_free "$PORT_BCB_AUTH" "app auth"
-    graft "$E2E_ROOT/lib/bcb-auth-bootstrap.ts" "$REPO_BCB" "scripts/e2e/auth-bootstrap.ts"
-    ( cd "$REPO_BCB" && \
-      DATABASE_URL="$BCB_DB_URL" NODE_ENV=development AWS_REGION=us-west-2 PORT="$PORT_BCB_AUTH" \
-      E2E_AGENCY_ISS="$JWKS_ISSUER" E2E_AGENCY_KID="$kid" \
-      JWT_AGENCY_PRIVATE_KEY_SECRET_NAME="e2e/agency-private-key" \
-      E2E_AGENCY_PRIVATE_KEY_PATH="$(key_path "$LEG_AGENCY-private.pem")" \
-      start_bg bcb-auth "$LOG_DIR/bcb-auth.log" \
-        pnpm exec ts-node -r tsconfig-paths/register scripts/e2e/auth-bootstrap.ts )
+    warn "app auth ya estaba arriba — se reinicia para correr el código actual"
   fi
+  stop_bg bcb-auth
+  ensure_port_free "$PORT_BCB_AUTH" "app auth"
+  graft "$E2E_ROOT/lib/bcb-auth-bootstrap.ts" "$REPO_BCB" "scripts/e2e/auth-bootstrap.ts"
+  ( cd "$REPO_BCB" && \
+    DATABASE_URL="$BCB_DB_URL" NODE_ENV=development AWS_REGION=us-west-2 PORT="$PORT_BCB_AUTH" \
+    E2E_AGENCY_ISS="$JWKS_ISSUER" E2E_AGENCY_KID="$kid" \
+    JWT_AGENCY_PRIVATE_KEY_SECRET_NAME="e2e/agency-private-key" \
+    E2E_AGENCY_PRIVATE_KEY_PATH="$(key_path "$LEG_AGENCY-private.pem")" \
+    start_bg bcb-auth "$LOG_DIR/bcb-auth.log" \
+      pnpm exec ts-node -r tsconfig-paths/register scripts/e2e/auth-bootstrap.ts )
 
   # app `agencies` de BCB — AD01–AD15 (agencias, sucursales, cortes, ventas, catálogos).
   # Guard, DTOs y Prisma reales; solo se sustituyen SecretManagerService (llave pública de
   # prueba), EmailService (correo de alta) y S3Service (XLSX del reporte).
   if is_running bcb-agencies; then
-    dim "   app agencies ya corriendo"
-  else
-    stop_bg bcb-agencies
-    ensure_port_free "$PORT_BCB_AGENCIES" "app agencies"
-    graft "$E2E_ROOT/lib/bcb-agencies-bootstrap.ts" "$REPO_BCB" "scripts/e2e/agencies-bootstrap.ts"
-    ( cd "$REPO_BCB" && \
-      DATABASE_URL="$BCB_DB_URL" NODE_ENV=development AWS_REGION=us-west-2 PORT="$PORT_BCB_AGENCIES" \
-      E2E_PUBLIC_KEY_PATH="$(key_path "$LEG_BCB-public.pem")" \
-      ADAPTER_BCB_URL="http://localhost:$PORT_ADAPTER_BCB/bcb" \
-      start_bg bcb-agencies "$LOG_DIR/bcb-agencies.log" \
-        pnpm exec ts-node -r tsconfig-paths/register scripts/e2e/agencies-bootstrap.ts )
+    warn "app agencies ya estaba arriba — se reinicia para correr el código actual"
   fi
+  stop_bg bcb-agencies
+  ensure_port_free "$PORT_BCB_AGENCIES" "app agencies"
+  graft "$E2E_ROOT/lib/bcb-agencies-bootstrap.ts" "$REPO_BCB" "scripts/e2e/agencies-bootstrap.ts"
+  ( cd "$REPO_BCB" && \
+    DATABASE_URL="$BCB_DB_URL" NODE_ENV=development AWS_REGION=us-west-2 PORT="$PORT_BCB_AGENCIES" \
+    E2E_PUBLIC_KEY_PATH="$(key_path "$LEG_BCB-public.pem")" \
+    ADAPTER_BCB_URL="http://localhost:$PORT_ADAPTER_BCB/bcb" \
+    start_bg bcb-agencies "$LOG_DIR/bcb-agencies.log" \
+      pnpm exec ts-node -r tsconfig-paths/register scripts/e2e/agencies-bootstrap.ts )
 
   # adapter-bcb: compartido con los otros flujos, pero ESTE necesita que apunten sus módulos
   # bcb-auth y agencies a los apps locales (por defecto van al API Gateway de develop). Se
@@ -230,7 +240,9 @@ PY
     stop_bg adapter-bcb; kill_port "$PORT_ADAPTER_BCB"
   fi
   export BCB_AUTH_SATELLITE_URL="http://localhost:$PORT_BCB_AUTH"
-  # El catálogo de endpoints ya trae el prefijo /portal, así que la base va sin sufijo.
+  # El catálogo de endpoints ya trae el prefijo /portal, así que en local la base va sin sufijo
+  # (Nest directo). En AWS la base termina en /agencies/portal: ese recurso de API Gateway recorta
+  # el prefijo y a Nest le llega solo lo que sigue; con /develop/agencies a secas todo da 404.
   export SATELLITE_AGENCIES_URL="http://localhost:$PORT_BCB_AGENCIES"
   start_adapter_bcb "$REPO_MAIN" "http://localhost:3009" "http://localhost:3011" "$LEG_BCB"
 
@@ -253,7 +265,7 @@ PY
       NATS_NKEY_SECRET=nats-nkey-portalagencias NATS_NKEY_SECRET_KEY_VALUE="{\"seed\":\"$seed_pa\"}" \
       SPRING_DATASOURCE_URL="$BIGER_DB_URL" \
       JWT_BYPASS=false JWT_PUBLIC_KEY="$(pem_escaped "$(key_path "$LEG_SAT_IN-public.pem")")" \
-      SATELLITE_PORTALAGENCIAS_URL="http://localhost:$PORT_SAT" \
+      SATELLITE_PORTALAGENCIAS_URL="http://localhost:$PORT_SAT/portal-agencias" \
       PORTALAGENCIAS_AUTH_PRIVATE_KEY_SECRET=portalagencias-jwt-local \
       PORTALAGENCIAS_AUTH_PRIVATE_KEY_SECRET_KEY_VALUE="$pa_priv_json" \
       PORTALAGENCIAS_AUTH_SUBJECT=adapter-portalagencias \
