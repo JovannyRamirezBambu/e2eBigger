@@ -554,6 +554,62 @@ export const cases: CaseDef[] = [
     },
   },
   {
+    name: 'a39-rfc-se-libera-al-borrar',
+    label: 'AD13: el RFC de una sucursal dada de baja se puede volver a registrar',
+    run: async (t) => {
+      /*
+       * Reportado desde el admin: borrabas un RFC y al recapturarlo saltaba un error de
+       * unicidad de la base. Los índices de rfc/usuario/correo eran totales —no ignoraban
+       * el borrado lógico— y la fila muerta seguía ocupando esos valores, en BCB y en la
+       * copia del satélite. Este caso recorre la cadena completa, que es donde se ve.
+       */
+      const rfc = rfcUnico('LIB');
+      const correo = `libre.${Date.now()}@example.com`;
+      const usuario = `libre.${Date.now()}`;
+      const cuerpo = {
+        rfc,
+        businessName: 'Sucursal Reutilizable SA de CV',
+        email: correo,
+        username: usuario,
+        phone: '2224445566',
+        address: 'Av. Reforma 200',
+        city: 'Puebla',
+      };
+
+      const alta = await adminPost(`/agencies/${AGENCIA.id}/branches`, cuerpo);
+      t.is('alta inicial', 201, alta.status, alta.text.slice(0, 300));
+
+      const borrado = await adminDelete(
+        `/agencies/${AGENCIA.id}/branches/${alta.body?.id}`,
+      );
+      t.is('se da de baja', 204, borrado.status, borrado.text.slice(0, 200));
+
+      // Lo que fallaba: el mismo RFC, el mismo correo y el mismo usuario, otra vez.
+      const realta = await adminPost(`/agencies/${AGENCIA.id}/branches`, cuerpo);
+      t.is(
+        'el mismo RFC se vuelve a registrar',
+        201,
+        realta.status,
+        realta.text.slice(0, 300),
+      );
+      t.is('y conserva su RFC real', rfc, realta.body?.rfc);
+
+      // Pero dos vivas con el mismo RFC siguen prohibidas.
+      const duplicada = await adminPost(`/agencies/${AGENCIA.id}/branches`, {
+        ...cuerpo,
+        email: `otro.${Date.now()}@example.com`,
+        username: `otro.${Date.now()}`,
+      });
+      t.assert(
+        'duplicar el RFC entre sucursales vivas sigue prohibido',
+        duplicada.status === 409 || duplicada.status === 400,
+        `status=${duplicada.status} ${duplicada.text.slice(0, 160)}`,
+      );
+
+      await adminDelete(`/agencies/${AGENCIA.id}/branches/${realta.body?.id}`);
+    },
+  },
+  {
     name: 'a28-no-borrar-unica-activa',
     label: 'AD13: la única sucursal activa de la agencia no se puede eliminar',
     run: async (t) => {
