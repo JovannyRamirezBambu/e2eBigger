@@ -1,0 +1,5 @@
+.session.json
+node_modules
+*.png
+results/
+keys/

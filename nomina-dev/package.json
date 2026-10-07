@@ -1,0 +1,16 @@
+{
+  "name": "nomina-dev",
+  "private": true,
+  "type": "module",
+  "description": "Validación del Portal de Nómina (CMS Administrador local ↔ adapter-portalnomina en dev) con un Chrome persistente compartido entre pruebas manuales y automáticas.",
+  "scripts": {
+    "chrome": "bash chrome.sh",
+    "token": "node token.mjs",
+    "api": "node api-tests.mjs",
+    "ui": "node ui-tests.mjs"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "playwright-core": "^1.63.0"
+  }
+}
